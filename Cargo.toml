@@ -1,0 +1,44 @@
+[package]
+name = "windbg-mcp-server"
+version = "0.1.0"
+edition = "2024"
+authors = ["mixednuts"]
+description = "MCP server for WinDbg debugging integration"
+license = "MIT"
+repository = "https://github.com/example/windbg-mcp-server"
+keywords = ["windbg", "mcp", "debugging", "dbgeng"]
+categories = ["development-tools::debugging"]
+
+[dependencies]
+rmcp = { version = "0.13", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+async-trait = "0.1"
+anyhow = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug_Extensions",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "windbg-mcp-server"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
