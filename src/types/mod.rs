@@ -73,6 +73,7 @@ pub struct SessionInfo {
 pub enum SessionType {
     Dump,
     Live,
+    Remote,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

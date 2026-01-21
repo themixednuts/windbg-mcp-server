@@ -84,6 +84,37 @@ impl DebugSession {
         })
     }
 
+    /// Create a new session by connecting to a remote debugging server.
+    ///
+    /// Connection string examples:
+    /// - `tcp:server=localhost,port=5005`
+    /// - `npipe:pipe=windbg_session`
+    pub fn connect_remote(
+        connection_string: &str,
+        safety_config: SafetyConfig,
+    ) -> DebugResult<Self> {
+        let mut client = DebugClient::connect_remote(connection_string)?;
+
+        let id = Uuid::new_v4().to_string();
+
+        // Try to get target info
+        let output = client.execute_command("||").unwrap_or_default();
+        let target = format!(
+            "Remote: {} - {}",
+            connection_string,
+            output.lines().next().unwrap_or("connected")
+        );
+
+        Ok(Self {
+            id,
+            session_type: SessionType::Remote,
+            target,
+            client,
+            safety_config,
+            active: true,
+        })
+    }
+
     /// Close the session.
     pub fn close(&mut self) -> DebugResult<()> {
         if self.active {
@@ -367,6 +398,18 @@ impl SessionManager {
     /// Attach to a process and create a session.
     pub fn attach_process(&self, pid: u32, non_invasive: bool) -> DebugResult<SessionInfo> {
         let session = DebugSession::attach_process(pid, non_invasive, self.safety_config.clone())?;
+        let info = session.get_info();
+        let id = session.id.clone();
+
+        let mut sessions = self.sessions.write();
+        sessions.insert(id, Arc::new(RwLock::new(session)));
+
+        Ok(info)
+    }
+
+    /// Connect to a remote debugging server and create a session.
+    pub fn connect_remote(&self, connection_string: &str) -> DebugResult<SessionInfo> {
+        let session = DebugSession::connect_remote(connection_string, self.safety_config.clone())?;
         let info = session.get_info();
         let id = session.id.clone();
 

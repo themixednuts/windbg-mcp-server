@@ -4,14 +4,17 @@ use super::output::OutputCapture;
 use crate::types::*;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Once;
 use thiserror::Error;
 use windows::{
     Win32::System::{
         Com::{COINIT_MULTITHREADED, CoInitializeEx},
         Diagnostics::Debug::Extensions::*,
+        LibraryLoader::SetDllDirectoryW,
+        Registry::{HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, RegOpenKeyExW, RegQueryValueExW},
     },
-    core::{Interface, PCWSTR},
+    core::{Interface, PCWSTR, w},
 };
 
 // Exception codes
@@ -29,6 +32,216 @@ const EXCEPTION_FLT_DIVIDE_BY_ZERO: u32 = 0xC000008E;
 const STATUS_HEAP_CORRUPTION: u32 = 0xC0000374;
 const STATUS_STACK_BUFFER_OVERRUN: u32 = 0xC0000409;
 
+/// Static initialization for DLL preloading.
+static INIT_DLL_PATH: Once = Once::new();
+
+/// Preloads the correct dbgeng.dll from Debugging Tools installation.
+///
+/// This is necessary because Windows has a built-in dbgeng.dll that lacks full functionality
+/// (e.g., remote debugging support). We need to explicitly load the one from Windows SDK
+/// or Debugging Tools installation BEFORE any dbgeng functions are called.
+///
+/// Uses LoadLibraryExW with LOAD_WITH_ALTERED_SEARCH_PATH to ensure we load from the
+/// specified path and not from System32.
+fn setup_dbgeng_dll_path() {
+    use windows::Win32::System::LibraryLoader::{
+        GetModuleHandleW, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW,
+    };
+
+    INIT_DLL_PATH.call_once(|| {
+        // Check if dbgeng.dll is already loaded
+        unsafe {
+            let already_loaded = GetModuleHandleW(w!("dbgeng.dll"));
+            if already_loaded.is_ok() {
+                tracing::warn!("dbgeng.dll is ALREADY loaded before our setup!");
+            } else {
+                tracing::debug!("dbgeng.dll is NOT yet loaded - good");
+            }
+        }
+
+        if let Some(debugger_path) = find_debugger_path() {
+            tracing::info!("Found debugger path: {}", debugger_path.display());
+
+            // Set the DLL directory first for dependent DLLs
+            let dir_path = to_wide_string(&debugger_path.to_string_lossy());
+            unsafe {
+                let result = SetDllDirectoryW(PCWSTR(dir_path.as_ptr()));
+                tracing::debug!("SetDllDirectoryW result: {:?}", result);
+            }
+
+            // Preload dbgeng.dll and its dependencies with full path
+            // LOAD_WITH_ALTERED_SEARCH_PATH ensures dependencies are loaded from same directory
+            let dlls_to_load = ["dbghelp.dll", "dbgcore.dll", "dbgeng.dll"];
+
+            for dll_name in &dlls_to_load {
+                let dll_path = debugger_path.join(dll_name);
+                tracing::debug!(
+                    "Checking {}: exists={}",
+                    dll_path.display(),
+                    dll_path.exists()
+                );
+
+                if dll_path.exists() {
+                    let wide_path = to_wide_string(&dll_path.to_string_lossy());
+
+                    unsafe {
+                        let handle = LoadLibraryExW(
+                            PCWSTR(wide_path.as_ptr()),
+                            None,
+                            LOAD_WITH_ALTERED_SEARCH_PATH,
+                        );
+                        match &handle {
+                            Ok(h) => tracing::info!("Loaded {}: handle={:?}", dll_name, h),
+                            Err(e) => tracing::error!("FAILED to load {}: {}", dll_name, e),
+                        }
+                    }
+                }
+            }
+
+            // Verify which dbgeng.dll is now loaded
+            unsafe {
+                let loaded = GetModuleHandleW(w!("dbgeng.dll"));
+                tracing::debug!("After preload, dbgeng.dll handle: {:?}", loaded);
+            }
+        } else {
+            tracing::warn!(
+                "Could not find Debugging Tools installation. \
+                 Remote connections may fail with ERROR_SERVER_DISABLED."
+            );
+        }
+    });
+}
+
+/// Find the Debugging Tools installation path.
+fn find_debugger_path() -> Option<PathBuf> {
+    // Try registry first - Windows SDK installation
+    if let Some(path) = find_debugger_from_registry() {
+        return Some(path);
+    }
+
+    // Try common installation paths
+    let common_paths = [
+        // Windows SDK x64
+        r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64",
+        // Windows SDK x86
+        r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x86",
+        // Standalone Debugging Tools x64
+        r"C:\Program Files\Debugging Tools for Windows (x64)",
+        // Standalone Debugging Tools x86
+        r"C:\Program Files (x86)\Debugging Tools for Windows (x86)",
+        // Alternative SDK location
+        r"C:\Program Files\Windows Kits\10\Debuggers\x64",
+    ];
+
+    for path_str in &common_paths {
+        let path = PathBuf::from(path_str);
+        if path.join("dbgeng.dll").exists() {
+            return Some(path);
+        }
+    }
+
+    // Try to find WinDbgX in WindowsApps (Store app)
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let windbg_preview = PathBuf::from(local_app_data)
+            .parent()
+            .map(|p| p.join("Local"))
+            .unwrap_or_default()
+            .parent()
+            .map(|p| p.join("Microsoft").join("WindowsApps"))
+            .unwrap_or_default();
+
+        if windbg_preview.exists() {
+            // Look for WinDbg Preview folder
+            if let Ok(entries) = std::fs::read_dir(&windbg_preview) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with("Microsoft.WinDbg_") {
+                        let dbgeng_path = entry.path().join("dbgeng.dll");
+                        if dbgeng_path.exists() {
+                            return Some(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Try to find debugger path from Windows registry.
+fn find_debugger_from_registry() -> Option<PathBuf> {
+    use windows::Win32::System::Registry::REG_VALUE_TYPE;
+
+    unsafe {
+        let mut key = std::mem::zeroed();
+        let subkey = w!("SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots");
+
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, Some(0), KEY_READ, &mut key).is_err() {
+            return None;
+        }
+
+        // Query WindowsDebuggersRoot10
+        let value_name = w!("WindowsDebuggersRoot10");
+        let mut data_type = REG_VALUE_TYPE::default();
+        let mut data_size = 0u32;
+
+        // First call to get size
+        let _ = RegQueryValueExW(
+            key,
+            value_name,
+            None,
+            Some(&mut data_type),
+            None,
+            Some(&mut data_size),
+        );
+
+        if data_size == 0 || data_type != REG_SZ {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; (data_size / 2) as usize];
+        if RegQueryValueExW(
+            key,
+            value_name,
+            None,
+            Some(&mut data_type),
+            Some(buffer.as_mut_ptr() as *mut u8),
+            Some(&mut data_size),
+        )
+        .is_ok()
+        {
+            // Remove null terminator
+            while buffer.last() == Some(&0) {
+                buffer.pop();
+            }
+
+            let root_path = String::from_utf16_lossy(&buffer);
+
+            // Append x64 or x86 based on target architecture
+            #[cfg(target_pointer_width = "64")]
+            let arch_path = PathBuf::from(&root_path).join("x64");
+            #[cfg(target_pointer_width = "32")]
+            let arch_path = PathBuf::from(&root_path).join("x86");
+
+            if arch_path.join("dbgeng.dll").exists() {
+                return Some(arch_path);
+            }
+        }
+
+        None
+    }
+}
+
+/// Convert a string to wide (UTF-16) string for Windows APIs.
+fn to_wide_string(s: &str) -> Vec<u16> {
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
 /// Errors that can occur during debug operations.
 #[derive(Debug, Error)]
 pub enum DebugError {
@@ -40,6 +253,9 @@ pub enum DebugError {
 
     #[error("Failed to attach to process: {0}")]
     AttachProcess(String),
+
+    #[error("Failed to connect to remote: {0}")]
+    ConnectRemote(String),
 
     #[error("Failed to execute command: {0}")]
     ExecuteCommand(String),
@@ -102,6 +318,9 @@ pub struct DebugClient {
 impl DebugClient {
     /// Create a new debug client.
     pub fn new() -> DebugResult<Self> {
+        // Ensure we use the correct dbgeng.dll from Debugging Tools
+        setup_dbgeng_dll_path();
+
         unsafe {
             // Initialize COM
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -110,62 +329,97 @@ impl DebugClient {
             let client: IDebugClient5 =
                 DebugCreate().map_err(|e| DebugError::ClientCreation(e.to_string()))?;
 
-            // Query for other interfaces
-            let control: IDebugControl4 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugControl4: {}", e))
-            })?;
-
-            let data_spaces: IDebugDataSpaces4 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugDataSpaces4: {}", e))
-            })?;
-
-            let symbols: IDebugSymbols3 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugSymbols3: {}", e))
-            })?;
-
-            let registers: IDebugRegisters2 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugRegisters2: {}", e))
-            })?;
-
-            let system_objects: IDebugSystemObjects4 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugSystemObjects4: {}", e))
-            })?;
-
-            let advanced: IDebugAdvanced3 = client.cast().map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to get IDebugAdvanced3: {}", e))
-            })?;
-
-            // Create and install output capture callbacks
-            let mut output = OutputCapture::new();
-            output.install(&client).map_err(|e| {
-                DebugError::ClientCreation(format!("Failed to install output callbacks: {}", e))
-            })?;
-
-            Ok(Self {
-                client,
-                control,
-                data_spaces,
-                symbols,
-                registers,
-                system_objects,
-                advanced,
-                output,
-            })
+            Self::from_client(client)
         }
     }
 
-    /// Convert a Rust string to wide string for Windows APIs.
-    fn to_wide_string(s: &str) -> Vec<u16> {
-        OsStr::new(s)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
+    /// Connect to a remote debugging server.
+    ///
+    /// Connection string examples:
+    /// - `tcp:server=localhost,port=5005`
+    /// - `npipe:pipe=windbg_session`
+    /// - `tcp:port=5005` (for server mode)
+    pub fn connect_remote(connection_string: &str) -> DebugResult<Self> {
+        use std::ffi::CString;
+        use windows_core::PCSTR;
+
+        // Ensure we use the correct dbgeng.dll from Debugging Tools
+        setup_dbgeng_dll_path();
+
+        unsafe {
+            // Initialize COM
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+            // Convert connection string to C string
+            let conn_cstr = CString::new(connection_string).map_err(|e| {
+                DebugError::ConnectRemote(format!("Invalid connection string: {}", e))
+            })?;
+
+            // Connect to remote debugging server
+            let mut client_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+            DebugConnect(
+                PCSTR(conn_cstr.as_ptr() as *const u8),
+                &IDebugClient5::IID,
+                &mut client_ptr,
+            )
+            .map_err(|e| DebugError::ConnectRemote(format!("Failed to connect: {}", e)))?;
+
+            // Convert raw pointer to interface
+            let client: IDebugClient5 = std::mem::transmute(client_ptr);
+
+            Self::from_client(client)
+        }
+    }
+
+    /// Create DebugClient from an existing IDebugClient5 interface.
+    fn from_client(client: IDebugClient5) -> DebugResult<Self> {
+        // Query for other interfaces
+        let control: IDebugControl4 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugControl4: {}", e))
+        })?;
+
+        let data_spaces: IDebugDataSpaces4 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugDataSpaces4: {}", e))
+        })?;
+
+        let symbols: IDebugSymbols3 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugSymbols3: {}", e))
+        })?;
+
+        let registers: IDebugRegisters2 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugRegisters2: {}", e))
+        })?;
+
+        let system_objects: IDebugSystemObjects4 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugSystemObjects4: {}", e))
+        })?;
+
+        let advanced: IDebugAdvanced3 = client.cast().map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to get IDebugAdvanced3: {}", e))
+        })?;
+
+        // Create and install output capture callbacks
+        let mut output = OutputCapture::new();
+        output.install(&client).map_err(|e| {
+            DebugError::ClientCreation(format!("Failed to install output callbacks: {}", e))
+        })?;
+
+        Ok(Self {
+            client,
+            control,
+            data_spaces,
+            symbols,
+            registers,
+            system_objects,
+            advanced,
+            output,
+        })
     }
 
     /// Open a crash dump file.
     pub fn open_dump(&mut self, path: &Path) -> DebugResult<String> {
         let path_str = path.to_string_lossy();
-        let wide_path = Self::to_wide_string(&path_str);
+        let wide_path = to_wide_string(&path_str);
 
         unsafe {
             self.client
@@ -214,7 +468,7 @@ impl DebugClient {
         // Clear any previous output
         self.output.clear();
 
-        let wide_command = Self::to_wide_string(command);
+        let wide_command = to_wide_string(command);
 
         unsafe {
             // Execute the command - output will be captured by our IDebugOutputCallbacks

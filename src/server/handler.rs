@@ -1,9 +1,8 @@
 //! MCP server handler implementation using rmcp 0.13 macros.
 
 use crate::config::SafetyConfig;
-use crate::debugger::SessionManager;
+use crate::debugger::DebuggerThread;
 use crate::types::*;
-use parking_lot::RwLock;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
@@ -16,7 +15,6 @@ use rmcp::{ErrorData as McpError, Json, RoleServer, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 // ============================================================================
 // Tool Parameter Types (for tools that don't match existing request types)
@@ -37,6 +35,12 @@ pub struct AttachParams {
     /// Whether to attach non-invasively (default: false)
     #[serde(default)]
     pub non_invasive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConnectRemoteParams {
+    /// Remote connection string (e.g., "tcp:server=localhost,port=5005" or "npipe:pipe=name")
+    pub connection_string: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -265,21 +269,18 @@ pub struct EvalScriptParams {
 /// WinDbg MCP Server.
 #[derive(Clone)]
 pub struct WinDbgServer {
-    session_manager: Arc<RwLock<SessionManager>>,
+    debugger: DebuggerThread,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
-
-// COM objects are thread-safe when properly initialized with COINIT_MULTITHREADED
-unsafe impl Send for WinDbgServer {}
-unsafe impl Sync for WinDbgServer {}
 
 #[tool_router]
 impl WinDbgServer {
     /// Create a new WinDbg MCP server.
     pub fn new(safety_config: SafetyConfig) -> Self {
+        let (debugger, _handle) = DebuggerThread::spawn(safety_config);
         Self {
-            session_manager: Arc::new(RwLock::new(SessionManager::new(safety_config))),
+            debugger,
             tool_router: Self::tool_router(),
         }
     }
@@ -330,9 +331,9 @@ impl WinDbgServer {
         params: Parameters<OpenDumpParams>,
     ) -> Result<Json<SessionInfo>, McpError> {
         let path = PathBuf::from(&params.0.path);
-        self.session_manager
-            .write()
+        self.debugger
             .open_dump(path, params.0.symbol_path.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error opening dump: {}", e), None))
     }
@@ -344,12 +345,28 @@ impl WinDbgServer {
         &self,
         params: Parameters<AttachParams>,
     ) -> Result<Json<SessionInfo>, McpError> {
-        self.session_manager
-            .write()
+        self.debugger
             .attach_process(params.0.pid, params.0.non_invasive)
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error attaching to process: {}", e), None)
+            })
+    }
+
+    #[tool(
+        description = "Connect to a remote WinDbg debugging server. Use this to attach to an existing WinDbg session that has started a server with .server command."
+    )]
+    async fn connect_remote(
+        &self,
+        params: Parameters<ConnectRemoteParams>,
+    ) -> Result<Json<SessionInfo>, McpError> {
+        self.debugger
+            .connect_remote(params.0.connection_string.clone())
+            .await
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error connecting to remote: {}", e), None)
             })
     }
 
@@ -358,9 +375,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<DetachResponse>, McpError> {
-        self.session_manager
-            .write()
-            .close_session(&params.0.session_id)
+        self.debugger
+            .detach(params.0.session_id.clone())
+            .await
             .map(|()| {
                 Json(DetachResponse {
                     message: "Session detached".to_string(),
@@ -371,7 +388,7 @@ impl WinDbgServer {
 
     #[tool(description = "List all active debug sessions.")]
     async fn list_sessions(&self) -> Result<Json<ListSessionsResponse>, McpError> {
-        let sessions = self.session_manager.read().list_sessions();
+        let sessions = self.debugger.list_sessions().await;
         Ok(Json(ListSessionsResponse { sessions }))
     }
 
@@ -384,11 +401,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<ExecuteParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&params.0.command)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), params.0.command.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error executing command: {}", e), None))
     }
@@ -405,9 +420,9 @@ impl WinDbgServer {
         } else {
             "!analyze"
         };
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.execute_command(cmd))
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd.to_string())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error analyzing: {}", e), None))
     }
@@ -425,11 +440,9 @@ impl WinDbgServer {
             ".scriptload \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&cmd)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd)
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error loading script: {}", e), None))
     }
@@ -443,11 +456,9 @@ impl WinDbgServer {
             ".scriptunload \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&cmd)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd)
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error unloading script: {}", e), None))
     }
@@ -463,11 +474,9 @@ impl WinDbgServer {
             ".scriptrun \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&cmd)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd)
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error running script: {}", e), None))
     }
@@ -485,11 +494,9 @@ impl WinDbgServer {
                 params.0.function, params.0.args
             )
         };
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&cmd)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd)
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error invoking script function: {}", e), None)
@@ -504,11 +511,9 @@ impl WinDbgServer {
         params: Parameters<EvalScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = format!("dx {}", params.0.code);
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(&cmd)
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), cmd)
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error evaluating expression: {}", e), None)
@@ -520,11 +525,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.execute_command(".scriptlist")
-            })
+        self.debugger
+            .execute(params.0.session_id.clone(), ".scriptlist".to_string())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error listing scripts: {}", e), None))
     }
@@ -538,11 +541,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<StackTraceParams>,
     ) -> Result<Json<GetStackTraceResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.get_stack_trace(params.0.thread_id, params.0.max_frames)
-            })
+        self.debugger
+            .get_stack_trace(
+                params.0.session_id.clone(),
+                params.0.thread_id,
+                params.0.max_frames,
+            )
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error getting stack trace: {}", e), None)
@@ -554,9 +559,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<ListThreadsResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.get_threads())
+        self.debugger
+            .list_threads(params.0.session_id.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error listing threads: {}", e), None))
     }
@@ -566,11 +571,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SwitchThreadParams>,
     ) -> Result<Json<SwitchThreadResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.switch_thread(params.0.thread_id)
-            })
+        self.debugger
+            .switch_thread(params.0.session_id.clone(), params.0.thread_id)
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error switching thread: {}", e), None))
     }
@@ -589,11 +592,14 @@ impl WinDbgServer {
             "unicode" => MemoryFormat::Unicode,
             _ => MemoryFormat::Hex,
         };
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.read_memory(&params.0.address, params.0.length, fmt)
-            })
+        self.debugger
+            .read_memory(
+                params.0.session_id.clone(),
+                params.0.address.clone(),
+                params.0.length,
+                fmt,
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error reading memory: {}", e), None))
     }
@@ -603,16 +609,15 @@ impl WinDbgServer {
         &self,
         params: Parameters<SearchMemoryParams>,
     ) -> Result<Json<SearchMemoryResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.search_memory(
-                    &params.0.start_address,
-                    params.0.length,
-                    &params.0.pattern,
-                    params.0.max_results,
-                )
-            })
+        self.debugger
+            .search_memory(
+                params.0.session_id.clone(),
+                params.0.start_address.clone(),
+                params.0.length,
+                params.0.pattern.clone(),
+                params.0.max_results,
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error searching memory: {}", e), None))
     }
@@ -624,11 +629,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<WriteMemoryParams>,
     ) -> Result<Json<WriteMemoryResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.write_memory(&params.0.address, &params.0.data)
-            })
+        self.debugger
+            .write_memory(
+                params.0.session_id.clone(),
+                params.0.address.clone(),
+                params.0.data.clone(),
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error writing memory: {}", e), None))
     }
@@ -640,18 +647,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<ResolveSymbolParams>,
     ) -> Result<Json<ResolveSymbolResponse>, McpError> {
-        // Use symbol if provided, otherwise use address
-        let query = params
-            .0
-            .symbol
-            .as_deref()
-            .or(params.0.address.as_deref())
-            .unwrap_or("");
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.resolve_symbol(query)
-            })
+        self.debugger
+            .resolve_symbol(
+                params.0.session_id.clone(),
+                params.0.symbol.clone(),
+                params.0.address.clone(),
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error resolving symbol: {}", e), None))
     }
@@ -661,9 +663,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<ListModulesResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.get_modules())
+        self.debugger
+            .list_modules(params.0.session_id.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error listing modules: {}", e), None))
     }
@@ -673,11 +675,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<TypeInfoParams>,
     ) -> Result<Json<GetTypeInfoResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.get_type_info(&params.0.module, &params.0.type_name)
-            })
+        self.debugger
+            .get_type_info(
+                params.0.session_id.clone(),
+                params.0.module.clone(),
+                params.0.type_name.clone(),
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error getting type info: {}", e), None))
     }
@@ -689,11 +693,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<RegistersParams>,
     ) -> Result<Json<GetRegistersResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.get_registers(&params.0.registers)
-            })
+        self.debugger
+            .get_registers(params.0.session_id.clone(), params.0.registers.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error getting registers: {}", e), None))
     }
@@ -703,11 +705,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<DisassembleParams>,
     ) -> Result<Json<DisassembleResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.disassemble(&params.0.address, params.0.count)
-            })
+        self.debugger
+            .disassemble(
+                params.0.session_id.clone(),
+                params.0.address.clone(),
+                params.0.count,
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error disassembling: {}", e), None))
     }
@@ -721,11 +725,13 @@ impl WinDbgServer {
         &self,
         params: Parameters<BreakpointParams>,
     ) -> Result<Json<SetBreakpointResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.set_breakpoint(&params.0.address, params.0.condition.as_deref())
-            })
+        self.debugger
+            .set_breakpoint(
+                params.0.session_id.clone(),
+                params.0.address.clone(),
+                params.0.condition.clone(),
+            )
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error setting breakpoint: {}", e), None))
     }
@@ -735,11 +741,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<RemoveBreakpointParams>,
     ) -> Result<Json<RemoveBreakpointResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| {
-                session.remove_breakpoint(params.0.breakpoint_id)
-            })
+        self.debugger
+            .remove_breakpoint(params.0.session_id.clone(), params.0.breakpoint_id)
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error removing breakpoint: {}", e), None)
@@ -753,9 +757,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<ExecutionControlResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.go())
+        self.debugger
+            .go(params.0.session_id.clone())
+            .await
             .map(Json)
             .map_err(|e| {
                 McpError::internal_error(format!("Error continuing execution: {}", e), None)
@@ -771,9 +775,9 @@ impl WinDbgServer {
             "out" => StepType::Out,
             _ => StepType::Over,
         };
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.step(st))
+        self.debugger
+            .step(params.0.session_id.clone(), st)
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error stepping: {}", e), None))
     }
@@ -785,9 +789,9 @@ impl WinDbgServer {
         &self,
         params: Parameters<SessionIdParam>,
     ) -> Result<Json<ExecutionControlResponse>, McpError> {
-        self.session_manager
-            .read()
-            .with_session(&params.0.session_id, |session| session.break_execution())
+        self.debugger
+            .break_execution(params.0.session_id.clone())
+            .await
             .map(Json)
             .map_err(|e| McpError::internal_error(format!("Error breaking execution: {}", e), None))
     }
