@@ -135,7 +135,11 @@ impl DebugClient {
                 DebugError::ClientCreation(format!("Failed to get IDebugAdvanced3: {}", e))
             })?;
 
-            let output = OutputCapture::new();
+            // Create and install output capture callbacks
+            let mut output = OutputCapture::new();
+            output.install(&client).map_err(|e| {
+                DebugError::ClientCreation(format!("Failed to install output callbacks: {}", e))
+            })?;
 
             Ok(Self {
                 client,
@@ -207,12 +211,13 @@ impl DebugClient {
 
     /// Execute a debugger command and return the output.
     pub fn execute_command(&mut self, command: &str) -> DebugResult<String> {
+        // Clear any previous output
         self.output.clear();
 
         let wide_command = Self::to_wide_string(command);
 
         unsafe {
-            // Execute the command
+            // Execute the command - output will be captured by our IDebugOutputCallbacks
             self.control
                 .ExecuteWide(
                     DEBUG_OUTCTL_THIS_CLIENT,
@@ -222,16 +227,8 @@ impl DebugClient {
                 .map_err(|e| DebugError::ExecuteCommand(format!("{}: {}", command, e)))?;
         }
 
-        // For now, we'll use a simple approach - execute and read output via another command
-        // In a full implementation, we'd set up output callbacks
-        self.capture_output(command)
-    }
-
-    /// Capture command output by executing it with output control.
-    fn capture_output(&mut self, command: &str) -> DebugResult<String> {
-        // For simple implementation, just return the command for now
-        // Real implementation would use IDebugOutputCallbacks with a buffer
-        Ok(format!("Command executed: {}", command))
+        // Return captured output
+        Ok(self.output.take())
     }
 
     /// Wait for a debug event.
@@ -862,6 +859,13 @@ impl DebugClient {
                 Ok(Vec::new())
             }
         }
+    }
+}
+
+impl Drop for DebugClient {
+    fn drop(&mut self) {
+        // Uninstall output callbacks before dropping
+        let _ = self.output.uninstall(&self.client, None);
     }
 }
 

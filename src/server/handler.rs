@@ -259,37 +259,6 @@ pub struct EvalScriptParams {
 }
 
 // ============================================================================
-// Response wrapper for simple results
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ToolResponse<T> {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl<T> ToolResponse<T> {
-    pub fn ok(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    pub fn err(msg: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
-}
-
-// ============================================================================
 // WinDbg MCP Server
 // ============================================================================
 
@@ -359,19 +328,13 @@ impl WinDbgServer {
     async fn open_dump(
         &self,
         params: Parameters<OpenDumpParams>,
-    ) -> Result<Json<ToolResponse<SessionInfo>>, String> {
+    ) -> Result<Json<SessionInfo>, McpError> {
         let path = PathBuf::from(&params.0.path);
-        match self
-            .session_manager
+        self.session_manager
             .write()
             .open_dump(path, params.0.symbol_path.clone())
-        {
-            Ok(info) => Ok(Json(ToolResponse::ok(info))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error opening dump: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error opening dump: {}", e), None))
     }
 
     #[tool(
@@ -380,37 +343,34 @@ impl WinDbgServer {
     async fn attach_process(
         &self,
         params: Parameters<AttachParams>,
-    ) -> Result<Json<ToolResponse<SessionInfo>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<SessionInfo>, McpError> {
+        self.session_manager
             .write()
             .attach_process(params.0.pid, params.0.non_invasive)
-        {
-            Ok(info) => Ok(Json(ToolResponse::ok(info))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error attaching to process: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error attaching to process: {}", e), None)
+            })
     }
 
     #[tool(description = "Detach from a debug session and close it.")]
     async fn detach(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<DetachResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<DetachResponse>, McpError> {
+        self.session_manager
             .write()
             .close_session(&params.0.session_id)
-        {
-            Ok(()) => Ok(Json(ToolResponse::ok(DetachResponse { success: true }))),
-            Err(e) => Ok(Json(ToolResponse::err(format!("Error detaching: {}", e)))),
-        }
+            .map(|()| {
+                Json(DetachResponse {
+                    message: "Session detached".to_string(),
+                })
+            })
+            .map_err(|e| McpError::internal_error(format!("Error detaching: {}", e), None))
     }
 
     #[tool(description = "List all active debug sessions.")]
-    async fn list_sessions(&self) -> Result<Json<ListSessionsResponse>, String> {
+    async fn list_sessions(&self) -> Result<Json<ListSessionsResponse>, McpError> {
         let sessions = self.session_manager.read().list_sessions();
         Ok(Json(ListSessionsResponse { sessions }))
     }
@@ -423,19 +383,14 @@ impl WinDbgServer {
     async fn execute(
         &self,
         params: Parameters<ExecuteParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&params.0.command)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error executing command: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error executing command: {}", e), None))
     }
 
     #[tool(
@@ -444,20 +399,17 @@ impl WinDbgServer {
     async fn analyze(
         &self,
         params: Parameters<AnalyzeParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = if params.0.verbose {
             "!analyze -v"
         } else {
             "!analyze"
         };
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.execute_command(cmd))
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!("Error analyzing: {}", e)))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error analyzing: {}", e), None))
     }
 
     // ==================== JavaScript Scripting ====================
@@ -468,46 +420,36 @@ impl WinDbgServer {
     async fn load_script(
         &self,
         params: Parameters<LoadScriptParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = format!(
             ".scriptload \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&cmd)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error loading script: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error loading script: {}", e), None))
     }
 
     #[tool(description = "Unload a previously loaded JavaScript script.")]
     async fn unload_script(
         &self,
         params: Parameters<UnloadScriptParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = format!(
             ".scriptunload \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&cmd)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error unloading script: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error unloading script: {}", e), None))
     }
 
     #[tool(
@@ -516,30 +458,25 @@ impl WinDbgServer {
     async fn run_script(
         &self,
         params: Parameters<RunScriptParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = format!(
             ".scriptrun \"{}\"",
             params.0.script_path.replace('\\', "\\\\")
         );
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&cmd)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error running script: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error running script: {}", e), None))
     }
 
     #[tool(description = "Invoke a function from a loaded JavaScript script using dx command.")]
     async fn invoke_script(
         &self,
         params: Parameters<InvokeScriptParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = if params.0.args.is_empty() {
             format!("dx @$scriptContents.{}()", params.0.function)
         } else {
@@ -548,18 +485,15 @@ impl WinDbgServer {
                 params.0.function, params.0.args
             )
         };
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&cmd)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error invoking script function: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error invoking script function: {}", e), None)
+            })
     }
 
     #[tool(
@@ -568,39 +502,31 @@ impl WinDbgServer {
     async fn eval(
         &self,
         params: Parameters<EvalScriptParams>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         let cmd = format!("dx {}", params.0.code);
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(&cmd)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error evaluating expression: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error evaluating expression: {}", e), None)
+            })
     }
 
     #[tool(description = "List all currently loaded JavaScript scripts.")]
     async fn list_scripts(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<ExecuteCommandResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ExecuteCommandResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.execute_command(".scriptlist")
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error listing scripts: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error listing scripts: {}", e), None))
     }
 
     // ==================== Stack & Threads ====================
@@ -611,56 +537,42 @@ impl WinDbgServer {
     async fn get_stack_trace(
         &self,
         params: Parameters<StackTraceParams>,
-    ) -> Result<Json<ToolResponse<GetStackTraceResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<GetStackTraceResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.get_stack_trace(params.0.thread_id, params.0.max_frames)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error getting stack trace: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error getting stack trace: {}", e), None)
+            })
     }
 
     #[tool(description = "List all threads in the target process.")]
     async fn list_threads(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<ListThreadsResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ListThreadsResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.get_threads())
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error listing threads: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error listing threads: {}", e), None))
     }
 
     #[tool(description = "Switch the debugger context to a different thread.")]
     async fn switch_thread(
         &self,
         params: Parameters<SwitchThreadParams>,
-    ) -> Result<Json<ToolResponse<SwitchThreadResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<SwitchThreadResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.switch_thread(params.0.thread_id)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error switching thread: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error switching thread: {}", e), None))
     }
 
     // ==================== Memory ====================
@@ -671,33 +583,27 @@ impl WinDbgServer {
     async fn read_memory(
         &self,
         params: Parameters<ReadMemoryParams>,
-    ) -> Result<Json<ToolResponse<ReadMemoryResponse>>, String> {
+    ) -> Result<Json<ReadMemoryResponse>, McpError> {
         let fmt = match params.0.format.as_str() {
             "ascii" => MemoryFormat::Ascii,
             "unicode" => MemoryFormat::Unicode,
             _ => MemoryFormat::Hex,
         };
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.read_memory(&params.0.address, params.0.length, fmt)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error reading memory: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error reading memory: {}", e), None))
     }
 
     #[tool(description = "Search memory for a byte pattern.")]
     async fn search_memory(
         &self,
         params: Parameters<SearchMemoryParams>,
-    ) -> Result<Json<ToolResponse<SearchMemoryResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<SearchMemoryResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.search_memory(
@@ -706,13 +612,9 @@ impl WinDbgServer {
                     &params.0.pattern,
                     params.0.max_results,
                 )
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error searching memory: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error searching memory: {}", e), None))
     }
 
     #[tool(
@@ -721,19 +623,14 @@ impl WinDbgServer {
     async fn write_memory(
         &self,
         params: Parameters<WriteMemoryParams>,
-    ) -> Result<Json<ToolResponse<WriteMemoryResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<WriteMemoryResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.write_memory(&params.0.address, &params.0.data)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error writing memory: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error writing memory: {}", e), None))
     }
 
     // ==================== Symbols ====================
@@ -742,7 +639,7 @@ impl WinDbgServer {
     async fn resolve_symbol(
         &self,
         params: Parameters<ResolveSymbolParams>,
-    ) -> Result<Json<ToolResponse<ResolveSymbolResponse>>, String> {
+    ) -> Result<Json<ResolveSymbolResponse>, McpError> {
         // Use symbol if provided, otherwise use address
         let query = params
             .0
@@ -750,55 +647,39 @@ impl WinDbgServer {
             .as_deref()
             .or(params.0.address.as_deref())
             .unwrap_or("");
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.resolve_symbol(query)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error resolving symbol: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error resolving symbol: {}", e), None))
     }
 
     #[tool(description = "List all loaded modules (DLLs/EXEs) in the target process.")]
     async fn list_modules(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<ListModulesResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ListModulesResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.get_modules())
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error listing modules: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error listing modules: {}", e), None))
     }
 
     #[tool(description = "Get the layout information for a type (struct, class, enum).")]
     async fn get_type_info(
         &self,
         params: Parameters<TypeInfoParams>,
-    ) -> Result<Json<ToolResponse<GetTypeInfoResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<GetTypeInfoResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.get_type_info(&params.0.module, &params.0.type_name)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error getting type info: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error getting type info: {}", e), None))
     }
 
     // ==================== Registers & Disassembly ====================
@@ -807,38 +688,28 @@ impl WinDbgServer {
     async fn get_registers(
         &self,
         params: Parameters<RegistersParams>,
-    ) -> Result<Json<ToolResponse<GetRegistersResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<GetRegistersResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.get_registers(&params.0.registers)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error getting registers: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error getting registers: {}", e), None))
     }
 
     #[tool(description = "Disassemble machine code at an address into assembly instructions.")]
     async fn disassemble(
         &self,
         params: Parameters<DisassembleParams>,
-    ) -> Result<Json<ToolResponse<DisassembleResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<DisassembleResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.disassemble(&params.0.address, params.0.count)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error disassembling: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error disassembling: {}", e), None))
     }
 
     // ==================== Live Debugging ====================
@@ -849,38 +720,30 @@ impl WinDbgServer {
     async fn set_breakpoint(
         &self,
         params: Parameters<BreakpointParams>,
-    ) -> Result<Json<ToolResponse<SetBreakpointResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<SetBreakpointResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.set_breakpoint(&params.0.address, params.0.condition.as_deref())
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error setting breakpoint: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error setting breakpoint: {}", e), None))
     }
 
     #[tool(description = "Remove a breakpoint by its ID.")]
     async fn remove_breakpoint(
         &self,
         params: Parameters<RemoveBreakpointParams>,
-    ) -> Result<Json<ToolResponse<RemoveBreakpointResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<RemoveBreakpointResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| {
                 session.remove_breakpoint(params.0.breakpoint_id)
-            }) {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error removing breakpoint: {}",
-                e
-            )))),
-        }
+            })
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error removing breakpoint: {}", e), None)
+            })
     }
 
     #[tool(
@@ -889,40 +752,30 @@ impl WinDbgServer {
     async fn go(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<ExecutionControlResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ExecutionControlResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.go())
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error continuing execution: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| {
+                McpError::internal_error(format!("Error continuing execution: {}", e), None)
+            })
     }
 
     #[tool(
         description = "Single-step execution (into, over, or out). Requires execution control to be enabled."
     )]
-    async fn step(
-        &self,
-        params: Parameters<StepParams>,
-    ) -> Result<Json<ToolResponse<StepResponse>>, String> {
+    async fn step(&self, params: Parameters<StepParams>) -> Result<Json<StepResponse>, McpError> {
         let st = match params.0.step_type.as_str() {
             "into" => StepType::Into,
             "out" => StepType::Out,
             _ => StepType::Over,
         };
-        match self
-            .session_manager
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.step(st))
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!("Error stepping: {}", e)))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error stepping: {}", e), None))
     }
 
     #[tool(
@@ -931,18 +784,12 @@ impl WinDbgServer {
     async fn break_execution(
         &self,
         params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ToolResponse<ExecutionControlResponse>>, String> {
-        match self
-            .session_manager
+    ) -> Result<Json<ExecutionControlResponse>, McpError> {
+        self.session_manager
             .read()
             .with_session(&params.0.session_id, |session| session.break_execution())
-        {
-            Ok(resp) => Ok(Json(ToolResponse::ok(resp))),
-            Err(e) => Ok(Json(ToolResponse::err(format!(
-                "Error breaking execution: {}",
-                e
-            )))),
-        }
+            .map(Json)
+            .map_err(|e| McpError::internal_error(format!("Error breaking execution: {}", e), None))
     }
 }
 

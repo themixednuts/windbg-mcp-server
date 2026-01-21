@@ -52,8 +52,8 @@ pub struct DetachRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DetachResponse {
-    /// Whether detach was successful
-    pub success: bool,
+    /// Message confirming detach
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -97,10 +97,6 @@ pub struct ExecuteCommandRequest {
 pub struct ExecuteCommandResponse {
     /// Command output
     pub output: String,
-    /// Whether command executed successfully
-    pub success: bool,
-    /// Error message if failed
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -219,8 +215,6 @@ pub struct SwitchThreadRequest {
 pub struct SwitchThreadResponse {
     /// New current thread ID
     pub thread_id: u32,
-    /// Success status
-    pub success: bool,
 }
 
 // ============================================================================
@@ -303,8 +297,6 @@ pub struct WriteMemoryRequest {
 pub struct WriteMemoryResponse {
     /// Number of bytes written
     pub bytes_written: u32,
-    /// Success status
-    pub success: bool,
 }
 
 // ============================================================================
@@ -471,8 +463,6 @@ pub struct SetBreakpointResponse {
     pub breakpoint_id: u32,
     /// Resolved address
     pub address: String,
-    /// Success status
-    pub success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -485,8 +475,8 @@ pub struct RemoveBreakpointRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RemoveBreakpointResponse {
-    /// Success status
-    pub success: bool,
+    /// Message confirming removal
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -497,9 +487,8 @@ pub struct ExecutionControlRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionControlResponse {
-    /// Success status
-    pub success: bool,
     /// Current state after operation
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
 }
 
@@ -526,9 +515,8 @@ pub enum StepType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StepResponse {
-    /// Success status
-    pub success: bool,
     /// New instruction pointer
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub instruction_pointer: Option<String>,
 }
 
@@ -619,8 +607,6 @@ pub struct SetDataBreakpointRequest {
 pub struct SetDataBreakpointResponse {
     /// Breakpoint ID
     pub breakpoint_id: u32,
-    /// Success status
-    pub success: bool,
 }
 
 // ============================================================================

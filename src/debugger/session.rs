@@ -104,18 +104,8 @@ impl DebugSession {
             .is_command_allowed(command)
             .map_err(|e| DebugError::ExecuteCommand(e.to_string()))?;
 
-        match self.client.execute_command(command) {
-            Ok(output) => Ok(ExecuteCommandResponse {
-                output,
-                success: true,
-                error: None,
-            }),
-            Err(e) => Ok(ExecuteCommandResponse {
-                output: String::new(),
-                success: false,
-                error: Some(e.to_string()),
-            }),
-        }
+        let output = self.client.execute_command(command)?;
+        Ok(ExecuteCommandResponse { output })
     }
 
     /// Run !analyze.
@@ -151,10 +141,7 @@ impl DebugSession {
     /// Switch thread.
     pub fn switch_thread(&mut self, thread_id: u32) -> DebugResult<SwitchThreadResponse> {
         self.client.switch_thread(thread_id)?;
-        Ok(SwitchThreadResponse {
-            thread_id,
-            success: true,
-        })
+        Ok(SwitchThreadResponse { thread_id })
     }
 
     /// Read memory.
@@ -228,10 +215,7 @@ impl DebugSession {
 
         let bytes_written = self.client.write_memory(addr, &data_bytes)?;
 
-        Ok(WriteMemoryResponse {
-            bytes_written,
-            success: true,
-        })
+        Ok(WriteMemoryResponse { bytes_written })
     }
 
     /// Resolve symbol.
@@ -281,14 +265,15 @@ impl DebugSession {
         Ok(SetBreakpointResponse {
             breakpoint_id: bp_id,
             address: address.to_string(),
-            success: true,
         })
     }
 
     /// Remove breakpoint.
     pub fn remove_breakpoint(&mut self, id: u32) -> DebugResult<RemoveBreakpointResponse> {
         self.client.remove_breakpoint(id)?;
-        Ok(RemoveBreakpointResponse { success: true })
+        Ok(RemoveBreakpointResponse {
+            message: format!("Breakpoint {} removed", id),
+        })
     }
 
     /// Continue execution.
@@ -299,7 +284,6 @@ impl DebugSession {
 
         self.client.go()?;
         Ok(ExecutionControlResponse {
-            success: true,
             state: Some("Running".to_string()),
         })
     }
@@ -312,7 +296,6 @@ impl DebugSession {
 
         let ip = self.client.step(step_type)?;
         Ok(StepResponse {
-            success: true,
             instruction_pointer: Some(ip),
         })
     }
@@ -325,7 +308,6 @@ impl DebugSession {
 
         self.client.break_execution()?;
         Ok(ExecutionControlResponse {
-            success: true,
             state: Some("Broken".to_string()),
         })
     }
