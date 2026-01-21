@@ -21,7 +21,7 @@ cargo build --release
 claude mcp add windbg /path/to/windbg-mcp-server.exe
 
 # Permissive mode (enables memory writes, execution control)
-claude mcp add windbg /path/to/windbg-mcp-server.exe -- --permissive
+claude mcp add-json windbg '{"command":"/path/to/windbg-mcp-server.exe","args":["--permissive"]}'
 ```
 
 ## Tools
@@ -30,6 +30,7 @@ claude mcp add windbg /path/to/windbg-mcp-server.exe -- --permissive
 |------|-------------|
 | `open_dump` | Open crash dump (.dmp) |
 | `attach_process` | Attach to live process |
+| `connect_remote` | Connect to remote WinDbg server |
 | `detach` | Detach from session |
 | `execute` | Run WinDbg command |
 | `analyze` | Run `!analyze -v` |
@@ -41,10 +42,26 @@ claude mcp add windbg /path/to/windbg-mcp-server.exe -- --permissive
 | `disassemble` | Disassemble code |
 | `get_registers` | Get CPU registers |
 | `set_breakpoint` | Set breakpoint* |
+| `remove_breakpoint` | Remove breakpoint* |
 | `go` | Continue execution* |
 | `step` | Single-step* |
+| `break_execution` | Break into debugger* |
 
 \* Requires `--permissive` flag
+
+## Remote Debugging
+
+To connect to a remote WinDbg session:
+
+1. Start a debug server in WinDbg:
+   ```
+   .server tcp:port=5005
+   ```
+
+2. Use `connect_remote` with the connection string:
+   ```
+   tcp:server=hostname,port=5005
+   ```
 
 ## Safety
 
