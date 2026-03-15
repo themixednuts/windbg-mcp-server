@@ -319,6 +319,18 @@ impl DebugSession {
         })
     }
 
+    /// Continue execution and wait for an event.
+    ///
+    /// This blocks until a debug event occurs (breakpoint, exception, etc.)
+    /// or the timeout expires. Default timeout is 30 seconds.
+    pub fn go_and_wait(&mut self, timeout_ms: u32) -> DebugResult<GoAndWaitResponse> {
+        self.safety_config
+            .check_execution_control()
+            .map_err(|e| DebugError::DbgEng(e.to_string()))?;
+
+        self.client.go_and_wait(timeout_ms)
+    }
+
     /// Step execution.
     pub fn step(&mut self, step_type: StepType) -> DebugResult<StepResponse> {
         self.safety_config

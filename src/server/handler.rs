@@ -1,23 +1,26 @@
-//! MCP server handler implementation using rmcp 0.13 macros.
+//! MCP server handler — tools, prompts, and server configuration.
 
 use crate::config::SafetyConfig;
 use crate::debugger::DebuggerThread;
 use crate::types::*;
-use rmcp::handler::server::ServerHandler;
-use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
+use rmcp::handler::server::router::prompt::PromptRouter;
+use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParam,
-    ServerCapabilities, ServerInfo, ToolsCapability,
+    GetPromptRequestParams, GetPromptResult, ListPromptsResult, PaginatedRequestParams,
+    PromptMessage, PromptMessageRole, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
-use rmcp::{ErrorData as McpError, Json, RoleServer, tool, tool_router};
+use rmcp::{
+    ErrorData as McpError, Json, RoleServer, ServerHandler, prompt, prompt_handler, prompt_router,
+    tool, tool_handler, tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // ============================================================================
-// Tool Parameter Types (for tools that don't match existing request types)
+// Tool Parameter Types
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -102,9 +105,9 @@ pub struct ReadMemoryParams {
     /// Number of bytes to read (default: 256)
     #[serde(default = "default_length")]
     pub length: u32,
-    /// Output format: "hex", "ascii", or "unicode"
+    /// Output format
     #[serde(default)]
-    pub format: String,
+    pub format: MemoryFormat,
 }
 
 fn default_length() -> u32 {
@@ -206,13 +209,19 @@ pub struct RemoveBreakpointParams {
 pub struct StepParams {
     /// Session ID
     pub session_id: String,
-    /// Step type: "into", "over", or "out"
-    #[serde(default = "default_step")]
-    pub step_type: String,
+    /// Step type
+    #[serde(default)]
+    pub step_type: StepType,
 }
 
-fn default_step() -> String {
-    "over".to_string()
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GoParams {
+    /// Session ID
+    pub session_id: String,
+    /// Optional timeout in milliseconds to wait for an event (breakpoint, exception, etc.).
+    /// If provided, the tool will block until an event occurs or the timeout expires.
+    /// If not provided (or 0), execution continues without waiting (non-blocking).
+    pub wait_timeout_ms: Option<u32>,
 }
 
 // ============================================================================
@@ -263,6 +272,32 @@ pub struct EvalScriptParams {
 }
 
 // ============================================================================
+// Prompt Parameter Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CrashTriageParams {
+    /// Path to the crash dump file (.dmp)
+    pub dump_path: String,
+    /// Optional symbol path
+    pub symbol_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadAnalysisParams {
+    /// Session ID of an active debug session
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryInvestigationParams {
+    /// Session ID of an active debug session
+    pub session_id: String,
+    /// Suspect address to start investigation (hex string or symbol)
+    pub address: Option<String>,
+}
+
+// ============================================================================
 // WinDbg MCP Server
 // ============================================================================
 
@@ -272,9 +307,10 @@ pub struct WinDbgServer {
     debugger: DebuggerThread,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<Self>,
 }
 
-#[tool_router]
 impl WinDbgServer {
     /// Create a new WinDbg MCP server.
     pub fn new(safety_config: SafetyConfig) -> Self {
@@ -282,6 +318,7 @@ impl WinDbgServer {
         Self {
             debugger,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -294,99 +331,74 @@ impl WinDbgServer {
     pub fn permissive() -> Self {
         Self::new(SafetyConfig::permissive())
     }
+}
 
-    /// Get server info.
-    pub fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: Default::default(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                ..Default::default()
-            },
-            server_info: Implementation {
-                name: "windbg-mcp-server".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: Some(
-                "WinDbg MCP Server provides debugging capabilities through the Windows Debug Engine. \
-                 Use debug_open_dump to open crash dumps or debug_attach_process to attach to live processes. \
-                 After opening a session, use the returned session_id with other tools."
-                    .into(),
-            ),
-        }
-    }
+// ============================================================================
+// Tools
+// ============================================================================
 
+#[tool_router]
+impl WinDbgServer {
     // ==================== Session Management ====================
 
-    #[tool(
-        description = "Open a crash dump file (.dmp) for analysis. Returns a session ID to use with other tools."
-    )]
+    /// Open a crash dump file (.dmp) for analysis. Returns a session ID to use with other tools.
+    #[tool(annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
     async fn open_dump(
         &self,
-        params: Parameters<OpenDumpParams>,
+        Parameters(OpenDumpParams { path, symbol_path }): Parameters<OpenDumpParams>,
     ) -> Result<Json<SessionInfo>, McpError> {
-        let path = PathBuf::from(&params.0.path);
         self.debugger
-            .open_dump(path, params.0.symbol_path.clone())
+            .open_dump(PathBuf::from(&path), symbol_path)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error opening dump: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error opening dump: {e}"), None))
     }
 
-    #[tool(
-        description = "Attach to a live process for debugging. Optionally attach non-invasively."
-    )]
+    /// Attach to a live process for debugging. Optionally attach non-invasively.
+    #[tool(annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
     async fn attach_process(
         &self,
-        params: Parameters<AttachParams>,
+        Parameters(AttachParams { pid, non_invasive }): Parameters<AttachParams>,
     ) -> Result<Json<SessionInfo>, McpError> {
         self.debugger
-            .attach_process(params.0.pid, params.0.non_invasive)
+            .attach_process(pid, non_invasive)
             .await
             .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error attaching to process: {}", e), None)
-            })
+            .map_err(|e| McpError::internal_error(format!("Error attaching to process: {e}"), None))
     }
 
-    #[tool(
-        description = "Connect to a remote WinDbg debugging server. Use this to attach to an existing WinDbg session that has started a server with .server command."
-    )]
+    /// Connect to a remote WinDbg debugging server. Use this to attach to an existing WinDbg session that has started a server with .server command.
+    #[tool(annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
     async fn connect_remote(
         &self,
-        params: Parameters<ConnectRemoteParams>,
+        Parameters(ConnectRemoteParams { connection_string }): Parameters<ConnectRemoteParams>,
     ) -> Result<Json<SessionInfo>, McpError> {
         self.debugger
-            .connect_remote(params.0.connection_string.clone())
+            .connect_remote(connection_string)
             .await
             .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error connecting to remote: {}", e), None)
-            })
+            .map_err(|e| McpError::internal_error(format!("Error connecting to remote: {e}"), None))
     }
 
-    #[tool(description = "Detach from a debug session and close it.")]
+    /// Detach from a debug session and close it.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn detach(
         &self,
-        params: Parameters<SessionIdParam>,
+        Parameters(SessionIdParam { session_id }): Parameters<SessionIdParam>,
     ) -> Result<Json<DetachResponse>, McpError> {
         self.debugger
-            .detach(params.0.session_id.clone())
+            .detach(session_id)
             .await
             .map(|()| {
                 Json(DetachResponse {
                     message: "Session detached".to_string(),
                 })
             })
-            .map_err(|e| McpError::internal_error(format!("Error detaching: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error detaching: {e}"), None))
     }
 
-    #[tool(description = "List all active debug sessions.")]
+    /// List all active debug sessions.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn list_sessions(&self) -> Result<Json<ListSessionsResponse>, McpError> {
         let sessions = self.debugger.list_sessions().await;
         Ok(Json(ListSessionsResponse { sessions }))
@@ -394,433 +406,566 @@ impl WinDbgServer {
 
     // ==================== Command Execution ====================
 
-    #[tool(
-        description = "Execute a WinDbg command and return the output. Some dangerous commands are blocked by safety policy."
-    )]
+    /// Execute a WinDbg command and return the output. Some dangerous commands are blocked by safety policy.
+    #[tool(annotations(open_world_hint = true))]
     async fn execute(
         &self,
-        params: Parameters<ExecuteParams>,
+        Parameters(ExecuteParams {
+            session_id,
+            command,
+        }): Parameters<ExecuteParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         self.debugger
-            .execute(params.0.session_id.clone(), params.0.command.clone())
+            .execute(session_id, command)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error executing command: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error executing command: {e}"), None))
     }
 
-    #[tool(
-        description = "Run !analyze -v to automatically analyze the crash dump and identify the root cause."
-    )]
+    /// Run !analyze -v to automatically analyze the crash dump and identify the root cause.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn analyze(
         &self,
-        params: Parameters<AnalyzeParams>,
+        Parameters(AnalyzeParams {
+            session_id,
+            verbose,
+        }): Parameters<AnalyzeParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = if params.0.verbose {
-            "!analyze -v"
-        } else {
-            "!analyze"
-        };
+        let cmd = if verbose { "!analyze -v" } else { "!analyze" };
         self.debugger
-            .execute(params.0.session_id.clone(), cmd.to_string())
+            .execute(session_id, cmd.to_string())
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error analyzing: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error analyzing: {e}"), None))
     }
 
     // ==================== JavaScript Scripting ====================
 
-    #[tool(
-        description = "Load a JavaScript debugging script (.js). The script remains loaded until unloaded or session ends."
-    )]
+    /// Load a JavaScript debugging script (.js). The script remains loaded until unloaded or session ends.
+    #[tool(annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = true))]
     async fn load_script(
         &self,
-        params: Parameters<LoadScriptParams>,
+        Parameters(LoadScriptParams {
+            session_id,
+            script_path,
+        }): Parameters<LoadScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = format!(
-            ".scriptload \"{}\"",
-            params.0.script_path.replace('\\', "\\\\")
-        );
+        let cmd = format!(".scriptload \"{}\"", script_path.replace('\\', "\\\\"));
         self.debugger
-            .execute(params.0.session_id.clone(), cmd)
+            .execute(session_id, cmd)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error loading script: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error loading script: {e}"), None))
     }
 
-    #[tool(description = "Unload a previously loaded JavaScript script.")]
+    /// Unload a previously loaded JavaScript script.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn unload_script(
         &self,
-        params: Parameters<UnloadScriptParams>,
+        Parameters(UnloadScriptParams {
+            session_id,
+            script_path,
+        }): Parameters<UnloadScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = format!(
-            ".scriptunload \"{}\"",
-            params.0.script_path.replace('\\', "\\\\")
-        );
+        let cmd = format!(".scriptunload \"{}\"", script_path.replace('\\', "\\\\"));
         self.debugger
-            .execute(params.0.session_id.clone(), cmd)
+            .execute(session_id, cmd)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error unloading script: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error unloading script: {e}"), None))
     }
 
-    #[tool(
-        description = "Load and immediately execute a JavaScript script. The script is unloaded after execution."
-    )]
+    /// Load and immediately execute a JavaScript script. The script is unloaded after execution.
+    #[tool(annotations(open_world_hint = true))]
     async fn run_script(
         &self,
-        params: Parameters<RunScriptParams>,
+        Parameters(RunScriptParams {
+            session_id,
+            script_path,
+        }): Parameters<RunScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = format!(
-            ".scriptrun \"{}\"",
-            params.0.script_path.replace('\\', "\\\\")
-        );
+        let cmd = format!(".scriptrun \"{}\"", script_path.replace('\\', "\\\\"));
         self.debugger
-            .execute(params.0.session_id.clone(), cmd)
+            .execute(session_id, cmd)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error running script: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error running script: {e}"), None))
     }
 
-    #[tool(description = "Invoke a function from a loaded JavaScript script using dx command.")]
+    /// Invoke a function from a loaded JavaScript script using dx command.
+    #[tool(annotations(open_world_hint = true))]
     async fn invoke_script(
         &self,
-        params: Parameters<InvokeScriptParams>,
+        Parameters(InvokeScriptParams {
+            session_id,
+            function,
+            args,
+        }): Parameters<InvokeScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = if params.0.args.is_empty() {
-            format!("dx @$scriptContents.{}()", params.0.function)
+        let cmd = if args.is_empty() {
+            format!("dx @$scriptContents.{function}()")
         } else {
-            format!(
-                "dx @$scriptContents.{}({})",
-                params.0.function, params.0.args
-            )
+            format!("dx @$scriptContents.{function}({args})")
         };
         self.debugger
-            .execute(params.0.session_id.clone(), cmd)
+            .execute(session_id, cmd)
             .await
             .map(Json)
             .map_err(|e| {
-                McpError::internal_error(format!("Error invoking script function: {}", e), None)
+                McpError::internal_error(format!("Error invoking script function: {e}"), None)
             })
     }
 
-    #[tool(
-        description = "Evaluate a JavaScript expression using the dx command. Useful for querying debugger data model."
-    )]
+    /// Evaluate a JavaScript expression using the dx command. Useful for querying debugger data model.
+    #[tool(annotations(read_only_hint = true, open_world_hint = true))]
     async fn eval(
         &self,
-        params: Parameters<EvalScriptParams>,
+        Parameters(EvalScriptParams { session_id, code }): Parameters<EvalScriptParams>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
-        let cmd = format!("dx {}", params.0.code);
+        let cmd = format!("dx {code}");
         self.debugger
-            .execute(params.0.session_id.clone(), cmd)
+            .execute(session_id, cmd)
             .await
             .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error evaluating expression: {}", e), None)
-            })
+            .map_err(|e| McpError::internal_error(format!("Error evaluating expression: {e}"), None))
     }
 
-    #[tool(description = "List all currently loaded JavaScript scripts.")]
+    /// List all currently loaded JavaScript scripts.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn list_scripts(
         &self,
-        params: Parameters<SessionIdParam>,
+        Parameters(SessionIdParam { session_id }): Parameters<SessionIdParam>,
     ) -> Result<Json<ExecuteCommandResponse>, McpError> {
         self.debugger
-            .execute(params.0.session_id.clone(), ".scriptlist".to_string())
+            .execute(session_id, ".scriptlist".to_string())
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error listing scripts: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error listing scripts: {e}"), None))
     }
 
     // ==================== Stack & Threads ====================
 
-    #[tool(
-        description = "Get the call stack for a thread. Shows function calls leading to the current location."
-    )]
+    /// Get the call stack for a thread. Shows function calls leading to the current location.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn get_stack_trace(
         &self,
-        params: Parameters<StackTraceParams>,
+        Parameters(StackTraceParams {
+            session_id,
+            thread_id,
+            max_frames,
+        }): Parameters<StackTraceParams>,
     ) -> Result<Json<GetStackTraceResponse>, McpError> {
         self.debugger
-            .get_stack_trace(
-                params.0.session_id.clone(),
-                params.0.thread_id,
-                params.0.max_frames,
-            )
+            .get_stack_trace(session_id, thread_id, max_frames)
             .await
             .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error getting stack trace: {}", e), None)
-            })
+            .map_err(|e| McpError::internal_error(format!("Error getting stack trace: {e}"), None))
     }
 
-    #[tool(description = "List all threads in the target process.")]
+    /// List all threads in the target process.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn list_threads(
         &self,
-        params: Parameters<SessionIdParam>,
+        Parameters(SessionIdParam { session_id }): Parameters<SessionIdParam>,
     ) -> Result<Json<ListThreadsResponse>, McpError> {
         self.debugger
-            .list_threads(params.0.session_id.clone())
+            .list_threads(session_id)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error listing threads: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error listing threads: {e}"), None))
     }
 
-    #[tool(description = "Switch the debugger context to a different thread.")]
+    /// Switch the debugger context to a different thread.
+    #[tool(annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
     async fn switch_thread(
         &self,
-        params: Parameters<SwitchThreadParams>,
+        Parameters(SwitchThreadParams {
+            session_id,
+            thread_id,
+        }): Parameters<SwitchThreadParams>,
     ) -> Result<Json<SwitchThreadResponse>, McpError> {
         self.debugger
-            .switch_thread(params.0.session_id.clone(), params.0.thread_id)
+            .switch_thread(session_id, thread_id)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error switching thread: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error switching thread: {e}"), None))
     }
 
     // ==================== Memory ====================
 
-    #[tool(
-        description = "Read memory from the target process. Supports hex, ASCII, and Unicode formats."
-    )]
+    /// Read memory from the target process. Supports hex, ASCII, and Unicode formats.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn read_memory(
         &self,
-        params: Parameters<ReadMemoryParams>,
+        Parameters(ReadMemoryParams {
+            session_id,
+            address,
+            length,
+            format,
+        }): Parameters<ReadMemoryParams>,
     ) -> Result<Json<ReadMemoryResponse>, McpError> {
-        let fmt = match params.0.format.as_str() {
-            "ascii" => MemoryFormat::Ascii,
-            "unicode" => MemoryFormat::Unicode,
-            _ => MemoryFormat::Hex,
-        };
         self.debugger
-            .read_memory(
-                params.0.session_id.clone(),
-                params.0.address.clone(),
-                params.0.length,
-                fmt,
-            )
+            .read_memory(session_id, address, length, format)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error reading memory: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error reading memory: {e}"), None))
     }
 
-    #[tool(description = "Search memory for a byte pattern.")]
+    /// Search memory for a byte pattern.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn search_memory(
         &self,
-        params: Parameters<SearchMemoryParams>,
+        Parameters(SearchMemoryParams {
+            session_id,
+            start_address,
+            length,
+            pattern,
+            max_results,
+        }): Parameters<SearchMemoryParams>,
     ) -> Result<Json<SearchMemoryResponse>, McpError> {
         self.debugger
-            .search_memory(
-                params.0.session_id.clone(),
-                params.0.start_address.clone(),
-                params.0.length,
-                params.0.pattern.clone(),
-                params.0.max_results,
-            )
+            .search_memory(session_id, start_address, length, pattern, max_results)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error searching memory: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error searching memory: {e}"), None))
     }
 
-    #[tool(
-        description = "Write data to memory in the target process. Disabled by default for safety."
-    )]
+    /// Write data to memory in the target process. Disabled by default for safety.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false))]
     async fn write_memory(
         &self,
-        params: Parameters<WriteMemoryParams>,
+        Parameters(WriteMemoryParams {
+            session_id,
+            address,
+            data,
+        }): Parameters<WriteMemoryParams>,
     ) -> Result<Json<WriteMemoryResponse>, McpError> {
         self.debugger
-            .write_memory(
-                params.0.session_id.clone(),
-                params.0.address.clone(),
-                params.0.data.clone(),
-            )
+            .write_memory(session_id, address, data)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error writing memory: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error writing memory: {e}"), None))
     }
 
     // ==================== Symbols ====================
 
-    #[tool(description = "Resolve a symbol name to an address or vice versa.")]
+    /// Resolve a symbol name to an address or vice versa.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn resolve_symbol(
         &self,
-        params: Parameters<ResolveSymbolParams>,
+        Parameters(ResolveSymbolParams {
+            session_id,
+            symbol,
+            address,
+        }): Parameters<ResolveSymbolParams>,
     ) -> Result<Json<ResolveSymbolResponse>, McpError> {
         self.debugger
-            .resolve_symbol(
-                params.0.session_id.clone(),
-                params.0.symbol.clone(),
-                params.0.address.clone(),
-            )
+            .resolve_symbol(session_id, symbol, address)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error resolving symbol: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error resolving symbol: {e}"), None))
     }
 
-    #[tool(description = "List all loaded modules (DLLs/EXEs) in the target process.")]
+    /// List all loaded modules (DLLs/EXEs) in the target process.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn list_modules(
         &self,
-        params: Parameters<SessionIdParam>,
+        Parameters(SessionIdParam { session_id }): Parameters<SessionIdParam>,
     ) -> Result<Json<ListModulesResponse>, McpError> {
         self.debugger
-            .list_modules(params.0.session_id.clone())
+            .list_modules(session_id)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error listing modules: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error listing modules: {e}"), None))
     }
 
-    #[tool(description = "Get the layout information for a type (struct, class, enum).")]
+    /// Get the layout information for a type (struct, class, enum).
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn get_type_info(
         &self,
-        params: Parameters<TypeInfoParams>,
+        Parameters(TypeInfoParams {
+            session_id,
+            module,
+            type_name,
+        }): Parameters<TypeInfoParams>,
     ) -> Result<Json<GetTypeInfoResponse>, McpError> {
         self.debugger
-            .get_type_info(
-                params.0.session_id.clone(),
-                params.0.module.clone(),
-                params.0.type_name.clone(),
-            )
+            .get_type_info(session_id, module, type_name)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error getting type info: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error getting type info: {e}"), None))
     }
 
     // ==================== Registers & Disassembly ====================
 
-    #[tool(description = "Get CPU register values.")]
+    /// Get CPU register values.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn get_registers(
         &self,
-        params: Parameters<RegistersParams>,
+        Parameters(RegistersParams {
+            session_id,
+            registers,
+        }): Parameters<RegistersParams>,
     ) -> Result<Json<GetRegistersResponse>, McpError> {
         self.debugger
-            .get_registers(params.0.session_id.clone(), params.0.registers.clone())
+            .get_registers(session_id, registers)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error getting registers: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error getting registers: {e}"), None))
     }
 
-    #[tool(description = "Disassemble machine code at an address into assembly instructions.")]
+    /// Disassemble machine code at an address into assembly instructions.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn disassemble(
         &self,
-        params: Parameters<DisassembleParams>,
+        Parameters(DisassembleParams {
+            session_id,
+            address,
+            count,
+        }): Parameters<DisassembleParams>,
     ) -> Result<Json<DisassembleResponse>, McpError> {
         self.debugger
-            .disassemble(
-                params.0.session_id.clone(),
-                params.0.address.clone(),
-                params.0.count,
-            )
+            .disassemble(session_id, address, count)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error disassembling: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error disassembling: {e}"), None))
     }
 
     // ==================== Live Debugging ====================
 
-    #[tool(
-        description = "Set a breakpoint at an address or symbol. Requires execution control to be enabled."
-    )]
+    /// Set a breakpoint at an address or symbol. Requires execution control to be enabled.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn set_breakpoint(
         &self,
-        params: Parameters<BreakpointParams>,
+        Parameters(BreakpointParams {
+            session_id,
+            address,
+            condition,
+        }): Parameters<BreakpointParams>,
     ) -> Result<Json<SetBreakpointResponse>, McpError> {
         self.debugger
-            .set_breakpoint(
-                params.0.session_id.clone(),
-                params.0.address.clone(),
-                params.0.condition.clone(),
-            )
+            .set_breakpoint(session_id, address, condition)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error setting breakpoint: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error setting breakpoint: {e}"), None))
     }
 
-    #[tool(description = "Remove a breakpoint by its ID.")]
+    /// Remove a breakpoint by its ID.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn remove_breakpoint(
         &self,
-        params: Parameters<RemoveBreakpointParams>,
+        Parameters(RemoveBreakpointParams {
+            session_id,
+            breakpoint_id,
+        }): Parameters<RemoveBreakpointParams>,
     ) -> Result<Json<RemoveBreakpointResponse>, McpError> {
         self.debugger
-            .remove_breakpoint(params.0.session_id.clone(), params.0.breakpoint_id)
+            .remove_breakpoint(session_id, breakpoint_id)
             .await
             .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error removing breakpoint: {}", e), None)
-            })
+            .map_err(|e| McpError::internal_error(format!("Error removing breakpoint: {e}"), None))
     }
 
-    #[tool(
-        description = "Continue execution of the target process. Requires execution control to be enabled."
-    )]
+    /// Continue execution of the target process. Requires execution control to be enabled.
+    /// If wait_timeout_ms is provided, blocks until an event occurs (breakpoint hit, exception,
+    /// process exit) or timeout expires. Returns detailed event information when waiting.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = false, open_world_hint = false))]
     async fn go(
         &self,
-        params: Parameters<SessionIdParam>,
-    ) -> Result<Json<ExecutionControlResponse>, McpError> {
-        self.debugger
-            .go(params.0.session_id.clone())
-            .await
-            .map(Json)
-            .map_err(|e| {
-                McpError::internal_error(format!("Error continuing execution: {}", e), None)
-            })
+        Parameters(GoParams {
+            session_id,
+            wait_timeout_ms,
+        }): Parameters<GoParams>,
+    ) -> Result<Json<GoAndWaitResponse>, McpError> {
+        let timeout = wait_timeout_ms.unwrap_or(0);
+
+        if timeout > 0 {
+            self.debugger
+                .go_and_wait(session_id, timeout)
+                .await
+                .map(Json)
+                .map_err(|e| {
+                    McpError::internal_error(format!("Error continuing execution: {e}"), None)
+                })
+        } else {
+            self.debugger.go(session_id).await.map_err(|e| {
+                McpError::internal_error(format!("Error continuing execution: {e}"), None)
+            })?;
+
+            Ok(Json(GoAndWaitResponse {
+                is_running: true,
+                stop_reason: None,
+                instruction_pointer: None,
+                thread_id: None,
+                breakpoint_id: None,
+                exception: None,
+                exit_code: None,
+                message:
+                    "Execution continued (non-blocking). Use wait_timeout_ms to wait for events."
+                        .to_string(),
+            }))
+        }
     }
 
-    #[tool(
-        description = "Single-step execution (into, over, or out). Requires execution control to be enabled."
-    )]
-    async fn step(&self, params: Parameters<StepParams>) -> Result<Json<StepResponse>, McpError> {
-        let st = match params.0.step_type.as_str() {
-            "into" => StepType::Into,
-            "out" => StepType::Out,
-            _ => StepType::Over,
-        };
+    /// Single-step execution (into, over, or out). Requires execution control to be enabled.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = false, open_world_hint = false))]
+    async fn step(
+        &self,
+        Parameters(StepParams {
+            session_id,
+            step_type,
+        }): Parameters<StepParams>,
+    ) -> Result<Json<StepResponse>, McpError> {
         self.debugger
-            .step(params.0.session_id.clone(), st)
+            .step(session_id, step_type)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error stepping: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error stepping: {e}"), None))
     }
 
-    #[tool(
-        description = "Break into the debugger, pausing execution. Requires execution control to be enabled."
-    )]
+    /// Break into the debugger, pausing execution. Requires execution control to be enabled.
+    #[tool(annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn break_execution(
         &self,
-        params: Parameters<SessionIdParam>,
+        Parameters(SessionIdParam { session_id }): Parameters<SessionIdParam>,
     ) -> Result<Json<ExecutionControlResponse>, McpError> {
         self.debugger
-            .break_execution(params.0.session_id.clone())
+            .break_execution(session_id)
             .await
             .map(Json)
-            .map_err(|e| McpError::internal_error(format!("Error breaking execution: {}", e), None))
+            .map_err(|e| McpError::internal_error(format!("Error breaking execution: {e}"), None))
     }
 }
 
-// Implement ServerHandler trait for WinDbgServer
+// ============================================================================
+// Prompts
+// ============================================================================
+
+#[prompt_router]
+impl WinDbgServer {
+    /// Guided crash dump triage workflow: open dump, run !analyze, inspect faulting thread, review modules.
+    #[prompt]
+    async fn crash_triage(
+        &self,
+        Parameters(CrashTriageParams {
+            dump_path,
+            symbol_path,
+        }): Parameters<CrashTriageParams>,
+    ) -> Result<GetPromptResult, McpError> {
+        let sym_note = symbol_path
+            .as_deref()
+            .map(|p| format!("Symbol path: {p}\n"))
+            .unwrap_or_default();
+
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "I need to triage a crash dump. Please follow these steps:\n\n\
+                 {sym_note}\
+                 1. Open the dump file at: {dump_path}\n\
+                 2. Run `analyze` with verbose=true to get the automated analysis\n\
+                 3. Get the stack trace for the faulting thread\n\
+                 4. List all threads and identify any that look suspicious\n\
+                 5. List loaded modules to check for known-bad or missing symbols\n\
+                 6. If an exception occurred, examine the exception record\n\
+                 7. Summarize findings with: root cause, faulting module, \
+                    recommended next steps\n\n\
+                 Be thorough but concise. Focus on actionable findings."
+            ),
+        )])
+        .with_description("Step-by-step crash dump triage"))
+    }
+
+    /// Thread analysis workflow: enumerate threads, get stack traces, identify deadlocks or contention.
+    #[prompt]
+    async fn thread_analysis(
+        &self,
+        Parameters(ThreadAnalysisParams { session_id }): Parameters<ThreadAnalysisParams>,
+    ) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Analyze threads in session {session_id} for deadlocks and contention:\n\n\
+                 1. List all threads to get an overview\n\
+                 2. Get stack traces for each thread (or the first 10 if many)\n\
+                 3. Identify threads waiting on synchronization primitives \
+                    (critical sections, mutexes, events, SRW locks)\n\
+                 4. Check for circular wait patterns that indicate deadlocks\n\
+                 5. Identify the thread holding each lock that others are waiting on\n\
+                 6. Look for threads stuck in long-running operations\n\
+                 7. Use `execute` with `!locks` to get kernel lock information\n\
+                 8. Summarize: which threads are blocked, what they're waiting on, \
+                    and whether a deadlock exists\n\n\
+                 Focus on the wait chain and lock ordering."
+            ),
+        )])
+        .with_description("Thread deadlock and contention analysis"))
+    }
+
+    /// Memory investigation workflow: inspect memory regions, search for patterns, analyze heap state.
+    #[prompt]
+    async fn memory_investigation(
+        &self,
+        Parameters(MemoryInvestigationParams {
+            session_id,
+            address,
+        }): Parameters<MemoryInvestigationParams>,
+    ) -> Result<GetPromptResult, McpError> {
+        let addr_note = address
+            .as_deref()
+            .map(|a| format!("Start investigation at address: {a}\n"))
+            .unwrap_or_default();
+
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Investigate memory issues in session {session_id}:\n\n\
+                 {addr_note}\
+                 1. Use `execute` with `!address -summary` to get memory usage overview\n\
+                 2. Use `execute` with `!heap -s` to summarize heap state\n\
+                 3. If a suspect address is provided, read memory around it and \
+                    check for corruption patterns (overwritten vtables, guard bytes, \
+                    freed memory patterns like 0xfeeefeee or 0xdddddddd)\n\
+                 4. Use `execute` with `!heap -p -a <address>` for page heap details \
+                    if page heap is enabled\n\
+                 5. Check for common corruption patterns:\n\
+                    - Buffer overruns (look for NUL-terminated strings overflowing)\n\
+                    - Use-after-free (look for 0xfeeefeee patterns)\n\
+                    - Double-free (check heap entry state)\n\
+                    - Stack overflow (check stack pointer vs stack limits)\n\
+                 6. Resolve any symbols near the suspect address\n\
+                 7. Summarize: type of corruption, likely cause, affected memory region"
+            ),
+        )])
+        .with_description("Memory corruption and leak investigation"))
+    }
+}
+
+// ============================================================================
+// ServerHandler
+// ============================================================================
+
+#[tool_handler]
+#[prompt_handler]
 impl ServerHandler for WinDbgServer {
     fn get_info(&self) -> ServerInfo {
-        WinDbgServer::get_info(self)
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParam>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
-            next_cursor: None,
-            meta: None,
-        })
-    }
-
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        let ctx = ToolCallContext::new(self, request, context);
-        self.tool_router.call(ctx).await
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "WinDbg MCP Server provides debugging capabilities through the Windows Debug Engine. \
+             Use open_dump to open crash dumps or attach_process to attach to live processes. \
+             After opening a session, use the returned session_id with other tools. \
+             Use the crash_triage, thread_analysis, or memory_investigation prompts for \
+             guided debugging workflows."
+                .to_string(),
+        )
     }
 }

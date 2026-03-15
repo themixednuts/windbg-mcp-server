@@ -128,6 +128,11 @@ pub enum DebugCommand {
         session_id: String,
         reply: oneshot::Sender<DebugResult<ExecutionControlResponse>>,
     },
+    GoAndWait {
+        session_id: String,
+        timeout_ms: u32,
+        reply: oneshot::Sender<DebugResult<GoAndWaitResponse>>,
+    },
     Step {
         session_id: String,
         step_type: StepType,
@@ -526,6 +531,24 @@ impl DebuggerThread {
         })
     }
 
+    pub async fn go_and_wait(
+        &self,
+        session_id: String,
+        timeout_ms: u32,
+    ) -> DebugResult<GoAndWaitResponse> {
+        let (tx, rx) = oneshot::channel();
+        self.send(DebugCommand::GoAndWait {
+            session_id,
+            timeout_ms,
+            reply: tx,
+        });
+        rx.await.unwrap_or_else(|_| {
+            Err(super::client::DebugError::DbgEng(
+                "Debugger thread died".to_string(),
+            ))
+        })
+    }
+
     pub async fn step(&self, session_id: String, step_type: StepType) -> DebugResult<StepResponse> {
         let (tx, rx) = oneshot::channel();
         self.send(DebugCommand::Step {
@@ -763,6 +786,15 @@ fn debugger_thread_main(receiver: mpsc::Receiver<DebugCommand>, safety_config: S
 
             DebugCommand::Go { session_id, reply } => {
                 let result = manager.with_session(&session_id, |s| s.go());
+                let _ = reply.send(result);
+            }
+
+            DebugCommand::GoAndWait {
+                session_id,
+                timeout_ms,
+                reply,
+            } => {
+                let result = manager.with_session(&session_id, |s| s.go_and_wait(timeout_ms));
                 let _ = reply.send(result);
             }
 

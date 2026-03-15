@@ -506,10 +506,11 @@ fn default_step_type() -> StepType {
     StepType::Over
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StepType {
     Into,
+    #[default]
     Over,
     Out,
 }
@@ -997,4 +998,55 @@ pub struct GetProcessInfoResponse {
     pub thread_count: u32,
     /// Number of loaded modules
     pub module_count: u32,
+}
+
+// ============================================================================
+// Execution Wait Types
+// ============================================================================
+
+/// The reason execution stopped after a go/continue command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    /// A breakpoint was hit
+    Breakpoint,
+    /// A single-step completed
+    SingleStep,
+    /// An exception occurred
+    Exception,
+    /// The process exited
+    ProcessExit,
+    /// A thread was created
+    ThreadCreate,
+    /// A thread exited
+    ThreadExit,
+    /// A module was loaded
+    ModuleLoad,
+    /// A module was unloaded
+    ModuleUnload,
+    /// The wait timed out (target still running)
+    Timeout,
+    /// Unknown stop reason
+    Unknown,
+}
+
+/// Response from go_and_wait - contains information about why execution stopped.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GoAndWaitResponse {
+    /// Whether the target is still running (true if timeout, false if stopped)
+    pub is_running: bool,
+    /// The reason execution stopped (None if still running/timeout)
+    pub stop_reason: Option<StopReason>,
+    /// Current instruction pointer (if stopped)
+    pub instruction_pointer: Option<String>,
+    /// Current thread ID (if stopped)
+    pub thread_id: Option<u32>,
+    /// Breakpoint ID that was hit (if stop_reason is Breakpoint)
+    pub breakpoint_id: Option<u32>,
+    /// Exception information (if stop_reason is Exception)
+    pub exception: Option<ExceptionRecord>,
+    /// Process exit code (if stop_reason is ProcessExit)
+    pub exit_code: Option<u32>,
+    /// Additional details/message about the stop
+    pub message: String,
 }

@@ -17,6 +17,20 @@ use windows::{
     core::{Interface, PCWSTR, w},
 };
 
+// Execution status constants from DbgEng (used for is_running check)
+const DEBUG_STATUS_GO: u32 = 1;
+const DEBUG_STATUS_GO_HANDLED: u32 = 2;
+const DEBUG_STATUS_GO_NOT_HANDLED: u32 = 3;
+const DEBUG_STATUS_STEP_OVER: u32 = 4;
+const DEBUG_STATUS_STEP_INTO: u32 = 5;
+const DEBUG_STATUS_BREAK: u32 = 6;
+const DEBUG_STATUS_NO_DEBUGGEE: u32 = 7;
+const DEBUG_STATUS_STEP_BRANCH: u32 = 8;
+const DEBUG_STATUS_REVERSE_GO: u32 = 11;
+const DEBUG_STATUS_REVERSE_STEP_BRANCH: u32 = 12;
+const DEBUG_STATUS_REVERSE_STEP_OVER: u32 = 13;
+const DEBUG_STATUS_REVERSE_STEP_INTO: u32 = 14;
+
 // Exception codes
 const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
 const EXCEPTION_BREAKPOINT: u32 = 0x80000003;
@@ -464,7 +478,14 @@ impl DebugClient {
     }
 
     /// Execute a debugger command and return the output.
+    /// Automatically breaks into the debugger if the target is running.
     pub fn execute_command(&mut self, command: &str) -> DebugResult<String> {
+        // Ensure we're in break state before executing commands
+        // Skip for "g" command since that's meant to resume execution
+        if command.trim() != "g" {
+            self.ensure_break_state()?;
+        }
+
         // Clear any previous output
         self.output.clear();
 
@@ -515,6 +536,9 @@ impl DebugClient {
 
     /// Read memory from the target.
     pub fn read_memory(&mut self, address: u64, size: u32) -> DebugResult<Vec<u8>> {
+        // Ensure we're in break state
+        self.ensure_break_state()?;
+
         let mut buffer = vec![0u8; size as usize];
         let mut bytes_read = 0u32;
 
@@ -567,6 +591,9 @@ impl DebugClient {
 
     /// Write memory to the target.
     pub fn write_memory(&mut self, address: u64, data: &[u8]) -> DebugResult<u32> {
+        // Ensure we're in break state
+        self.ensure_break_state()?;
+
         let mut bytes_written = 0u32;
 
         unsafe {
@@ -704,6 +731,240 @@ impl DebugClient {
                 .map_err(|e| DebugError::DbgEng(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Get the current execution status.
+    pub fn get_execution_status(&self) -> DebugResult<u32> {
+        unsafe {
+            self.control
+                .GetExecutionStatus()
+                .map_err(|e| DebugError::DbgEng(format!("Failed to get execution status: {}", e)))
+        }
+    }
+
+    /// Check if the debugger is currently in a running state.
+    pub fn is_running(&self) -> bool {
+        match self.get_execution_status() {
+            Ok(status) => matches!(
+                status,
+                DEBUG_STATUS_GO
+                    | DEBUG_STATUS_GO_HANDLED
+                    | DEBUG_STATUS_GO_NOT_HANDLED
+                    | DEBUG_STATUS_STEP_OVER
+                    | DEBUG_STATUS_STEP_INTO
+                    | DEBUG_STATUS_STEP_BRANCH
+                    | DEBUG_STATUS_REVERSE_GO
+                    | DEBUG_STATUS_REVERSE_STEP_BRANCH
+                    | DEBUG_STATUS_REVERSE_STEP_OVER
+                    | DEBUG_STATUS_REVERSE_STEP_INTO
+            ),
+            Err(_) => false,
+        }
+    }
+
+    /// Ensure the debugger is in break state before executing commands.
+    /// If the target is running, breaks into it and waits.
+    /// Returns Ok(true) if we had to break, Ok(false) if already broken.
+    pub fn ensure_break_state(&mut self) -> DebugResult<bool> {
+        if self.is_running() {
+            tracing::info!("Target is running, breaking into debugger...");
+            self.break_execution()?;
+            // Wait for break to take effect (short timeout)
+            let _ = self.wait_for_event_with_timeout(5000);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Wait for a debug event with timeout.
+    ///
+    /// Returns Ok(true) if an event occurred, Ok(false) if timed out.
+    pub fn wait_for_event_with_timeout(&mut self, timeout_ms: u32) -> DebugResult<bool> {
+        unsafe {
+            let result = self.control.WaitForEvent(0, timeout_ms);
+            match result {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    // S_FALSE (0x00000001) means timeout - not an error
+                    // E_PENDING means still waiting
+                    // E_UNEXPECTED can mean no target or timeout
+                    let code = e.code().0 as u32;
+                    if code == 1 || code == 0x8000000A || e.code().is_ok() {
+                        // Timeout or pending - target still running
+                        Ok(false)
+                    } else {
+                        Err(DebugError::DbgEng(format!(
+                            "Wait for event failed: {} (0x{:08x})",
+                            e,
+                            e.code().0
+                        )))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Continue execution and wait for an event with timeout.
+    ///
+    /// This is the main method for blocking execution control.
+    /// If a timeout occurs, automatically breaks into the debugger so subsequent
+    /// commands can be executed.
+    pub fn go_and_wait(&mut self, timeout_ms: u32) -> DebugResult<GoAndWaitResponse> {
+        // First, continue execution
+        self.execute_command("g")?;
+
+        // Wait for an event
+        let event_occurred = self.wait_for_event_with_timeout(timeout_ms)?;
+
+        if !event_occurred {
+            // Timeout - target is still running, break into it
+            tracing::info!(
+                "go_and_wait: timeout after {}ms, breaking into debugger",
+                timeout_ms
+            );
+            self.break_execution()?;
+
+            // Wait for the break to take effect
+            let _ = self.wait_for_event_with_timeout(5000);
+
+            // Get current state after break
+            let ip = self.execute_command("r rip").ok();
+            let instruction_pointer = ip
+                .as_ref()
+                .and_then(|s| s.split('=').nth(1).map(|v| v.trim().to_string()));
+            let thread_id = self.get_current_thread_id().ok();
+
+            return Ok(GoAndWaitResponse {
+                is_running: false,
+                stop_reason: Some(StopReason::Timeout),
+                instruction_pointer,
+                thread_id,
+                breakpoint_id: None,
+                exception: None,
+                exit_code: None,
+                message: format!(
+                    "Timeout after {}ms - execution was stopped. No breakpoint or event occurred.",
+                    timeout_ms
+                ),
+            });
+        }
+
+        // Event occurred - gather information about what happened
+        self.build_stop_response()
+    }
+
+    /// Build a response describing why execution stopped.
+    fn build_stop_response(&mut self) -> DebugResult<GoAndWaitResponse> {
+        // Get execution status to determine stop reason
+        let status = self.get_execution_status().unwrap_or(DEBUG_STATUS_BREAK);
+
+        // Get current instruction pointer
+        let ip = self.execute_command("r rip").ok();
+        let instruction_pointer = ip
+            .as_ref()
+            .and_then(|s| s.split('=').nth(1).map(|v| v.trim().to_string()));
+
+        // Get current thread ID
+        let thread_id = self.get_current_thread_id().ok();
+
+        // Parse current IP as address for breakpoint matching
+        let current_ip = instruction_pointer.as_ref().and_then(|s| parse_address(s));
+
+        // Check if we stopped at a breakpoint by comparing current IP to breakpoint addresses
+        let bp_list = self.get_breakpoints().unwrap_or_default();
+        let hit_breakpoint = current_ip.and_then(|ip| {
+            bp_list.iter().find(|bp| {
+                // Parse the breakpoint address and compare
+                bp.resolved_address
+                    .as_ref()
+                    .or(Some(&bp.address))
+                    .and_then(|addr| parse_address(addr))
+                    .is_some_and(|bp_addr| bp_addr == ip)
+            })
+        });
+
+        // Check for exception
+        let exception_info = self.get_exception_info().ok();
+        let has_exception = exception_info.as_ref().is_some_and(|e| e.has_exception);
+        let exc = exception_info.and_then(|e| e.exception);
+
+        // Determine stop reason
+        let (stop_reason, exception, breakpoint_id, exit_code, message) =
+            if let Some(bp) = hit_breakpoint {
+                // We're at a breakpoint address
+                let symbol_info = bp
+                    .symbol
+                    .as_ref()
+                    .map(|s| format!(" ({})", s))
+                    .unwrap_or_default();
+                (
+                    StopReason::Breakpoint,
+                    None,
+                    Some(bp.id),
+                    None,
+                    format!("Breakpoint {} hit at {}{}", bp.id, bp.address, symbol_info),
+                )
+            } else if has_exception {
+                let is_breakpoint = exc.as_ref().is_some_and(|e| e.code == EXCEPTION_BREAKPOINT);
+                let is_single_step = exc
+                    .as_ref()
+                    .is_some_and(|e| e.code == EXCEPTION_SINGLE_STEP);
+
+                if is_breakpoint {
+                    // int 3 but not at a user breakpoint
+                    (
+                        StopReason::Breakpoint,
+                        None,
+                        None,
+                        None,
+                        "Breakpoint exception (int 3)".to_string(),
+                    )
+                } else if is_single_step {
+                    (
+                        StopReason::SingleStep,
+                        None,
+                        None,
+                        None,
+                        "Single step completed".to_string(),
+                    )
+                } else {
+                    let msg = exc
+                        .as_ref()
+                        .map(|e| format!("Exception: {} at {}", e.name, e.address))
+                        .unwrap_or_else(|| "Exception occurred".to_string());
+                    (StopReason::Exception, exc, None, None, msg)
+                }
+            } else {
+                // Check execution status for other stop reasons
+                match status {
+                    DEBUG_STATUS_NO_DEBUGGEE => (
+                        StopReason::ProcessExit,
+                        None,
+                        None,
+                        Some(0),
+                        "Process exited".to_string(),
+                    ),
+                    _ => (
+                        StopReason::Unknown,
+                        None,
+                        None,
+                        None,
+                        "Execution stopped".to_string(),
+                    ),
+                }
+            };
+
+        Ok(GoAndWaitResponse {
+            is_running: false,
+            stop_reason: Some(stop_reason),
+            instruction_pointer,
+            thread_id,
+            breakpoint_id,
+            exception,
+            exit_code,
+            message,
+        })
     }
 
     /// Get exception information.
