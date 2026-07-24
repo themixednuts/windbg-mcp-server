@@ -8,4 +8,4 @@ mod thread;
 pub use client::{DebugClient, DebugError};
 pub use output::OutputCapture;
 pub use session::{DebugSession, SessionManager};
-pub use thread::DebuggerThread;
+pub use thread::{DebuggerThread, DebuggerThreadGuard};

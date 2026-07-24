@@ -8,14 +8,21 @@ MCP server for WinDbg debugging integration. Enables AI assistants to analyze cr
 - [Debugging Tools for Windows](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/) (Windows SDK)
 - Rust 1.85+ (edition 2024)
 
+## Install
+
+```bash
+# From this repo
+cargo install --path . --force
+
+# Or via cargo-binstall (GitHub release binaries)
+cargo binstall --git https://github.com/themixednuts/windbg-mcp-server
+```
+
 ## Build
 
 ```bash
-# Standard build (stdio transport only)
+# Default build includes stdio + Streamable HTTP
 cargo build --release
-
-# With HTTP transport support
-cargo build --release --features http
 ```
 
 ## Usage
@@ -30,18 +37,38 @@ claude mcp add windbg /path/to/windbg-mcp-server.exe
 claude mcp add-json windbg '{"command":"/path/to/windbg-mcp-server.exe","args":["--permissive"]}'
 ```
 
-### HTTP (requires `http` feature)
+Stdio mode exits when the parent MCP host dies, and on startup reclaims any
+same-parent leftover `windbg-mcp-server` processes from a host that dropped the
+child handle without terminating it (common on reconnect).
+
+### HTTP (Streamable HTTP at `/mcp`)
 
 ```bash
-# Stateful — sessions persist across requests
-windbg-mcp-server --http --port 8080
+# Stateful — MCP sessions persist (default port 8081 to avoid Ghidra's 8080)
+windbg-mcp-server --http --permissive
+
+# Explicit bind/port
+windbg-mcp-server --http --bind 127.0.0.1 --port 8081 --permissive
 
 # Stateless — each request is independent, direct JSON responses
-windbg-mcp-server --http --stateless --port 8080
-
-# Both modes support --permissive
-windbg-mcp-server --http --port 8080 --permissive
+windbg-mcp-server --http --stateless --port 8081
 ```
+
+OpenCode stdio MCP example (`opencode.json`) — host launches the server:
+
+```json
+{
+  "mcp": {
+    "windbg": {
+      "type": "local",
+      "command": ["windbg-mcp-server", "--permissive"],
+      "enabled": true
+    }
+  }
+}
+```
+
+HTTP remote alternative: `{"type":"remote","url":"http://127.0.0.1:8081/mcp","enabled":true}` after `windbg-mcp-server --http --permissive`.
 
 ## Tools
 

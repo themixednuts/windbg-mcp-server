@@ -1,23 +1,20 @@
 //! MCP server handler — tools, prompts, and server configuration.
 
 use crate::config::SafetyConfig;
-use crate::debugger::DebuggerThread;
+use crate::debugger::{DebuggerThread, DebuggerThreadGuard};
 use crate::types::*;
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{
-    GetPromptRequestParams, GetPromptResult, ListPromptsResult, PaginatedRequestParams,
-    PromptMessage, PromptMessageRole, ServerCapabilities, ServerInfo,
-};
-use rmcp::service::RequestContext;
+use rmcp::model::{GetPromptResult, PromptMessage, Role, ServerCapabilities, ServerInfo};
 use rmcp::{
-    ErrorData as McpError, Json, RoleServer, ServerHandler, prompt, prompt_handler, prompt_router,
-    tool, tool_handler, tool_router,
+    ErrorData as McpError, Json, ServerHandler, prompt, prompt_handler, prompt_router, tool,
+    tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // ============================================================================
 // Tool Parameter Types
@@ -305,6 +302,9 @@ pub struct MemoryInvestigationParams {
 #[derive(Clone)]
 pub struct WinDbgServer {
     debugger: DebuggerThread,
+    /// Keeps the debugger worker alive; last clone drop shuts it down.
+    #[allow(dead_code)]
+    debugger_guard: Arc<DebuggerThreadGuard>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     #[allow(dead_code)]
@@ -314,9 +314,10 @@ pub struct WinDbgServer {
 impl WinDbgServer {
     /// Create a new WinDbg MCP server.
     pub fn new(safety_config: SafetyConfig) -> Self {
-        let (debugger, _handle) = DebuggerThread::spawn(safety_config);
+        let (debugger, debugger_guard) = DebuggerThread::spawn(safety_config);
         Self {
             debugger,
+            debugger_guard,
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
@@ -858,7 +859,7 @@ impl WinDbgServer {
             .unwrap_or_default();
 
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             format!(
                 "I need to triage a crash dump. Please follow these steps:\n\n\
                  {sym_note}\
@@ -883,7 +884,7 @@ impl WinDbgServer {
         Parameters(ThreadAnalysisParams { session_id }): Parameters<ThreadAnalysisParams>,
     ) -> Result<GetPromptResult, McpError> {
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             format!(
                 "Analyze threads in session {session_id} for deadlocks and contention:\n\n\
                  1. List all threads to get an overview\n\
@@ -917,7 +918,7 @@ impl WinDbgServer {
             .unwrap_or_default();
 
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             format!(
                 "Investigate memory issues in session {session_id}:\n\n\
                  {addr_note}\

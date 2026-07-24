@@ -7,8 +7,9 @@ use super::client::DebugResult;
 use super::session::SessionManager;
 use crate::config::SafetyConfig;
 use crate::types::*;
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use tokio::sync::oneshot;
 
@@ -153,16 +154,42 @@ pub struct DebuggerThread {
     sender: mpsc::Sender<DebugCommand>,
 }
 
+/// Owns the debugger worker thread. Dropping the last `Arc` shuts it down and joins.
+pub struct DebuggerThreadGuard {
+    sender: mpsc::Sender<DebugCommand>,
+    join: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for DebuggerThreadGuard {
+    fn drop(&mut self) {
+        let _ = self.sender.send(DebugCommand::Shutdown);
+        if let Some(join) = self.join.lock().take() {
+            if let Err(err) = join.join() {
+                tracing::warn!("Debugger thread join failed: {err:?}");
+            }
+        }
+    }
+}
+
 impl DebuggerThread {
-    /// Spawn the debugger thread and return a handle to it.
-    pub fn spawn(safety_config: SafetyConfig) -> (Self, JoinHandle<()>) {
+    /// Spawn the debugger thread.
+    ///
+    /// Keep the returned [`DebuggerThreadGuard`] (typically behind `Arc`) for the
+    /// process lifetime. Dropping it sends shutdown and joins the worker — do not
+    /// detach/forget the join handle.
+    pub fn spawn(safety_config: SafetyConfig) -> (Self, Arc<DebuggerThreadGuard>) {
         let (sender, receiver) = mpsc::channel::<DebugCommand>();
 
-        let handle = thread::spawn(move || {
+        let join = thread::spawn(move || {
             debugger_thread_main(receiver, safety_config);
         });
 
-        (Self { sender }, handle)
+        let guard = Arc::new(DebuggerThreadGuard {
+            sender: sender.clone(),
+            join: Mutex::new(Some(join)),
+        });
+
+        (Self { sender }, guard)
     }
 
     /// Send a command and wait for the result.

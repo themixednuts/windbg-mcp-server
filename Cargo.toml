@@ -10,11 +10,11 @@ keywords = ["windbg", "mcp", "debugging", "dbgeng"]
 categories = ["development-tools::debugging"]
 
 [features]
-default = []
+default = ["http"]
 http = ["rmcp/transport-streamable-http-server", "dep:tokio-util", "dep:axum"]
 
 [dependencies]
-rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "2.2", features = ["server", "transport-io", "macros"] }
 tokio-util = { version = "0.7", optional = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"], optional = true }
 tokio = { version = "1", features = ["full"] }
@@ -27,12 +27,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_Security",
   "Win32_System_Com",
   "Win32_System_Diagnostics_Debug_Extensions",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_LibraryLoader",
   "Win32_System_Threading",
   "Win32_System_Registry",
@@ -50,3 +53,10 @@ path = "src/main.rs"
 opt-level = 3
 lto = true
 strip = true
+
+# https://github.com/cargo-bins/cargo-binstall/blob/main/SUPPORT.md
+# Install: cargo binstall --git https://github.com/themixednuts/windbg-mcp-server
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
