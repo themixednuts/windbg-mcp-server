@@ -128,7 +128,13 @@ fn setup_dbgeng_dll_path() {
 
 /// Find the Debugging Tools installation path.
 fn find_debugger_path() -> Option<PathBuf> {
-    // Try registry first - Windows SDK installation
+    // Try WinDbgX (Store app) first - it has the newest dbgeng.dll
+    // which is required to connect to WinDbgX remote servers
+    if let Some(path) = find_windbgx_path() {
+        return Some(path);
+    }
+
+    // Try registry - Windows SDK installation
     if let Some(path) = find_debugger_from_registry() {
         return Some(path);
     }
@@ -154,29 +160,35 @@ fn find_debugger_path() -> Option<PathBuf> {
         }
     }
 
-    // Try to find WinDbgX in WindowsApps (Store app)
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        let windbg_preview = PathBuf::from(local_app_data)
-            .parent()
-            .map(|p| p.join("Local"))
-            .unwrap_or_default()
-            .parent()
-            .map(|p| p.join("Microsoft").join("WindowsApps"))
-            .unwrap_or_default();
+    None
+}
 
-        if windbg_preview.exists() {
-            // Look for WinDbg Preview folder
-            if let Ok(entries) = std::fs::read_dir(&windbg_preview) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if name_str.starts_with("Microsoft.WinDbg_") {
-                        let dbgeng_path = entry.path().join("dbgeng.dll");
-                        if dbgeng_path.exists() {
-                            return Some(entry.path());
-                        }
-                    }
-                }
+/// Find WinDbgX (Store app) installation path.
+/// Uses PowerShell Get-AppxPackage to find the actual install location,
+/// since C:\Program Files\WindowsApps is ACL-protected and can't be enumerated.
+fn find_windbgx_path() -> Option<PathBuf> {
+    // Use PowerShell to find WinDbgX install location (bypasses WindowsApps ACLs)
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-AppxPackage *WinDbg* | Select-Object -First 1 -ExpandProperty InstallLocation)",
+        ])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let install_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !install_path.is_empty() {
+            let amd64_path = PathBuf::from(&install_path).join("amd64");
+            if amd64_path.join("dbgeng.dll").exists() {
+                tracing::info!("Found WinDbgX at: {}", amd64_path.display());
+                return Some(amd64_path);
+            }
+            let root = PathBuf::from(&install_path);
+            if root.join("dbgeng.dll").exists() {
+                tracing::info!("Found WinDbgX at: {}", root.display());
+                return Some(root);
             }
         }
     }
