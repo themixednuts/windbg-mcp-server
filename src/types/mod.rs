@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct OpenDumpRequest {
     /// Path to the crash dump file (.dmp)
     pub dump_path: String,
@@ -16,6 +17,7 @@ pub struct OpenDumpRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct OpenDumpResponse {
     /// Unique session identifier
     pub session_id: String,
@@ -26,6 +28,7 @@ pub struct OpenDumpResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AttachProcessRequest {
     /// Process ID to attach to
     pub pid: u32,
@@ -35,6 +38,7 @@ pub struct AttachProcessRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AttachProcessResponse {
     /// Unique session identifier
     pub session_id: String,
@@ -45,18 +49,21 @@ pub struct AttachProcessResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DetachRequest {
     /// Session ID to detach from
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DetachResponse {
     /// Message confirming detach
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SessionInfo {
     /// Unique session identifier
     pub session_id: String,
@@ -69,6 +76,7 @@ pub struct SessionInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionType {
     Dump,
@@ -77,6 +85,7 @@ pub enum SessionType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListSessionsResponse {
     /// List of active sessions
     pub sessions: Vec<SessionInfo>,
@@ -87,6 +96,7 @@ pub struct ListSessionsResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExecuteCommandRequest {
     /// Session ID to execute command in
     pub session_id: String,
@@ -95,12 +105,14 @@ pub struct ExecuteCommandRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExecuteCommandResponse {
     /// Command output
     pub output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AnalyzeRequest {
     /// Session ID to analyze
     pub session_id: String,
@@ -114,6 +126,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AnalyzeResponse {
     /// Raw analysis output
     pub raw_output: String,
@@ -134,6 +147,7 @@ pub struct AnalyzeResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetStackTraceRequest {
     /// Session ID
     pub session_id: String,
@@ -149,6 +163,7 @@ fn default_max_frames() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct StackFrame {
     /// Frame number
     pub frame_number: u32,
@@ -171,6 +186,7 @@ pub struct StackFrame {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetStackTraceResponse {
     /// Thread ID
     pub thread_id: u32,
@@ -179,12 +195,14 @@ pub struct GetStackTraceResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListThreadsRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ThreadInfo {
     /// Thread ID
     pub thread_id: u32,
@@ -199,12 +217,14 @@ pub struct ThreadInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListThreadsResponse {
     /// List of threads
     pub threads: Vec<ThreadInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SwitchThreadRequest {
     /// Session ID
     pub session_id: String,
@@ -213,6 +233,7 @@ pub struct SwitchThreadRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SwitchThreadResponse {
     /// New current thread ID
     pub thread_id: u32,
@@ -223,6 +244,7 @@ pub struct SwitchThreadResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryFormat {
     #[default]
@@ -233,6 +255,7 @@ pub enum MemoryFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ReadMemoryRequest {
     /// Session ID
     pub session_id: String,
@@ -246,6 +269,7 @@ pub struct ReadMemoryRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ReadMemoryResponse {
     /// Address that was read
     pub address: String,
@@ -258,6 +282,7 @@ pub struct ReadMemoryResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SearchMemoryRequest {
     /// Session ID
     pub session_id: String,
@@ -277,6 +302,7 @@ fn default_max_results() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SearchMemoryResponse {
     /// Found addresses
     pub matches: Vec<String>,
@@ -285,6 +311,7 @@ pub struct SearchMemoryResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct WriteMemoryRequest {
     /// Session ID
     pub session_id: String,
@@ -295,6 +322,7 @@ pub struct WriteMemoryRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct WriteMemoryResponse {
     /// Number of bytes written
     pub bytes_written: u32,
@@ -305,6 +333,7 @@ pub struct WriteMemoryResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ResolveSymbolRequest {
     /// Session ID
     pub session_id: String,
@@ -313,6 +342,7 @@ pub struct ResolveSymbolRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ResolveSymbolResponse {
     /// Symbol name
     pub name: Option<String>,
@@ -325,12 +355,14 @@ pub struct ResolveSymbolResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListModulesRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ModuleInfo {
     /// Module name
     pub name: String,
@@ -347,12 +379,14 @@ pub struct ModuleInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListModulesResponse {
     /// List of modules
     pub modules: Vec<ModuleInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetTypeInfoRequest {
     /// Session ID
     pub session_id: String,
@@ -363,6 +397,7 @@ pub struct GetTypeInfoRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct TypeFieldInfo {
     /// Field name
     pub name: String,
@@ -375,6 +410,7 @@ pub struct TypeFieldInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetTypeInfoResponse {
     /// Type name
     pub name: String,
@@ -389,6 +425,7 @@ pub struct GetTypeInfoResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetRegistersRequest {
     /// Session ID
     pub session_id: String,
@@ -398,6 +435,7 @@ pub struct GetRegistersRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RegisterValue {
     /// Register name
     pub name: String,
@@ -406,12 +444,14 @@ pub struct RegisterValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetRegistersResponse {
     /// Register values
     pub registers: Vec<RegisterValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DisassembleRequest {
     /// Session ID
     pub session_id: String,
@@ -427,6 +467,7 @@ fn default_instruction_count() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DisassemblyLine {
     /// Instruction address
     pub address: String,
@@ -439,6 +480,7 @@ pub struct DisassemblyLine {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DisassembleResponse {
     /// Disassembly lines
     pub instructions: Vec<DisassemblyLine>,
@@ -449,6 +491,7 @@ pub struct DisassembleResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SetBreakpointRequest {
     /// Session ID
     pub session_id: String,
@@ -459,6 +502,7 @@ pub struct SetBreakpointRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SetBreakpointResponse {
     /// Breakpoint ID
     pub breakpoint_id: u32,
@@ -467,6 +511,7 @@ pub struct SetBreakpointResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RemoveBreakpointRequest {
     /// Session ID
     pub session_id: String,
@@ -475,18 +520,21 @@ pub struct RemoveBreakpointRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RemoveBreakpointResponse {
     /// Message confirming removal
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExecutionControlRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExecutionControlResponse {
     /// Current state after operation
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,6 +542,7 @@ pub struct ExecutionControlResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct StepRequest {
     /// Session ID
     pub session_id: String,
@@ -507,6 +556,7 @@ fn default_step_type() -> StepType {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum StepType {
     Into,
@@ -516,6 +566,7 @@ pub enum StepType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct StepResponse {
     /// New instruction pointer
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -527,6 +578,7 @@ pub struct StepResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum BreakpointType {
     /// Software breakpoint (int 3)
@@ -539,6 +591,7 @@ pub enum BreakpointType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum BreakpointState {
     #[default]
@@ -547,6 +600,7 @@ pub enum BreakpointState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum DataBreakpointAccess {
     Read,
@@ -556,6 +610,7 @@ pub enum DataBreakpointAccess {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct BreakpointInfo {
     /// Breakpoint ID
     pub id: u32,
@@ -582,18 +637,21 @@ pub struct BreakpointInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListBreakpointsRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ListBreakpointsResponse {
     /// List of breakpoints
     pub breakpoints: Vec<BreakpointInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SetDataBreakpointRequest {
     /// Session ID
     pub session_id: String,
@@ -606,6 +664,7 @@ pub struct SetDataBreakpointRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SetDataBreakpointResponse {
     /// Breakpoint ID
     pub breakpoint_id: u32,
@@ -616,6 +675,7 @@ pub struct SetDataBreakpointResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "snake_case")]
 pub enum DebugEventType {
     Exception,
@@ -631,6 +691,7 @@ pub enum DebugEventType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExceptionRecord {
     /// Exception code
     pub code: u32,
@@ -653,6 +714,7 @@ pub struct ExceptionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DebugEventInfo {
     /// Event type
     pub event_type: DebugEventType,
@@ -669,12 +731,14 @@ pub struct DebugEventInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetExceptionInfoRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetExceptionInfoResponse {
     /// Whether an exception is present
     pub has_exception: bool,
@@ -689,6 +753,7 @@ pub struct GetExceptionInfoResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct MemoryProtection {
     pub read: bool,
     pub write: bool,
@@ -698,6 +763,7 @@ pub struct MemoryProtection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryState {
     Commit,
@@ -706,6 +772,7 @@ pub enum MemoryState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryType {
     Image,
@@ -714,6 +781,7 @@ pub enum MemoryType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct MemoryRegionInfo {
     /// Base address of the region
     pub base_address: String,
@@ -732,6 +800,7 @@ pub struct MemoryRegionInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetMemoryRegionsRequest {
     /// Session ID
     pub session_id: String,
@@ -742,6 +811,7 @@ pub struct GetMemoryRegionsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetMemoryRegionsResponse {
     /// Memory regions
     pub regions: Vec<MemoryRegionInfo>,
@@ -752,6 +822,7 @@ pub struct GetMemoryRegionsResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "lowercase")]
 pub enum RegisterType {
     /// General purpose register
@@ -773,6 +844,7 @@ pub enum RegisterType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RegisterInfo {
     /// Register name
     pub name: String,
@@ -789,6 +861,7 @@ pub struct RegisterInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetExtendedRegistersRequest {
     /// Session ID
     pub session_id: String,
@@ -804,6 +877,7 @@ pub struct GetExtendedRegistersRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetExtendedRegistersResponse {
     /// General registers
     pub general: Vec<RegisterInfo>,
@@ -820,6 +894,7 @@ pub struct GetExtendedRegistersResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct FlagsRegister {
     /// Raw value
     pub value: u64,
@@ -848,6 +923,7 @@ pub struct FlagsRegister {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolType {
     Function,
@@ -862,6 +938,7 @@ pub enum SymbolType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SymbolInfo {
     /// Symbol name
     pub name: String,
@@ -880,6 +957,7 @@ pub struct SymbolInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct LineInfo {
     /// Source file path
     pub file: String,
@@ -894,6 +972,7 @@ pub struct LineInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetSymbolInfoRequest {
     /// Session ID
     pub session_id: String,
@@ -905,12 +984,14 @@ pub struct GetSymbolInfoRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetSymbolInfoResponse {
     /// Matching symbols
     pub symbols: Vec<SymbolInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetSourceLineRequest {
     /// Session ID
     pub session_id: String,
@@ -919,6 +1000,7 @@ pub struct GetSourceLineRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetSourceLineResponse {
     /// Line information
     pub line: Option<LineInfo>,
@@ -931,6 +1013,7 @@ pub struct GetSourceLineResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ThreadContext {
     /// Thread ID
     pub thread_id: u32,
@@ -949,6 +1032,7 @@ pub struct ThreadContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetThreadContextRequest {
     /// Session ID
     pub session_id: String,
@@ -957,6 +1041,7 @@ pub struct GetThreadContextRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetThreadContextResponse {
     /// Thread context
     pub context: ThreadContext,
@@ -967,6 +1052,7 @@ pub struct GetThreadContextResponse {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ProcessInfo {
     /// Process ID
     pub pid: u32,
@@ -985,12 +1071,14 @@ pub struct ProcessInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetProcessInfoRequest {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GetProcessInfoResponse {
     /// Process information
     pub process: ProcessInfo,
@@ -1006,6 +1094,7 @@ pub struct GetProcessInfoResponse {
 
 /// The reason execution stopped after a go/continue command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// A breakpoint was hit
@@ -1032,6 +1121,7 @@ pub enum StopReason {
 
 /// Response from go_and_wait - contains information about why execution stopped.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GoAndWaitResponse {
     /// Whether the target is still running (true if timeout, false if stopped)
     pub is_running: bool,

@@ -21,6 +21,7 @@ use std::sync::Arc;
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct OpenDumpParams {
     /// Path to the crash dump file (.dmp)
     pub path: String,
@@ -29,6 +30,7 @@ pub struct OpenDumpParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AttachParams {
     /// Process ID to attach to
     pub pid: u32,
@@ -38,18 +40,21 @@ pub struct AttachParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ConnectRemoteParams {
     /// Remote connection string (e.g., "tcp:server=localhost,port=5005" or "npipe:pipe=name")
     pub connection_string: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SessionIdParam {
     /// Session ID
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ExecuteParams {
     /// Session ID
     pub session_id: String,
@@ -58,6 +63,7 @@ pub struct ExecuteParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct AnalyzeParams {
     /// Session ID
     pub session_id: String,
@@ -71,6 +77,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct StackTraceParams {
     /// Session ID
     pub session_id: String,
@@ -86,6 +93,7 @@ fn default_max_frames() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SwitchThreadParams {
     /// Session ID
     pub session_id: String,
@@ -94,6 +102,7 @@ pub struct SwitchThreadParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ReadMemoryParams {
     /// Session ID
     pub session_id: String,
@@ -112,6 +121,7 @@ fn default_length() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct SearchMemoryParams {
     /// Session ID
     pub session_id: String,
@@ -131,6 +141,7 @@ fn default_max_results() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct WriteMemoryParams {
     /// Session ID
     pub session_id: String,
@@ -141,6 +152,7 @@ pub struct WriteMemoryParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ResolveSymbolParams {
     /// Session ID
     pub session_id: String,
@@ -151,6 +163,7 @@ pub struct ResolveSymbolParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct TypeInfoParams {
     /// Session ID
     pub session_id: String,
@@ -161,6 +174,7 @@ pub struct TypeInfoParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RegistersParams {
     /// Session ID
     pub session_id: String,
@@ -170,6 +184,7 @@ pub struct RegistersParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct DisassembleParams {
     /// Session ID
     pub session_id: String,
@@ -185,6 +200,7 @@ fn default_count() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct BreakpointParams {
     /// Session ID
     pub session_id: String,
@@ -195,6 +211,7 @@ pub struct BreakpointParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RemoveBreakpointParams {
     /// Session ID
     pub session_id: String,
@@ -203,6 +220,7 @@ pub struct RemoveBreakpointParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct StepParams {
     /// Session ID
     pub session_id: String,
@@ -212,6 +230,7 @@ pub struct StepParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct GoParams {
     /// Session ID
     pub session_id: String,
@@ -226,6 +245,7 @@ pub struct GoParams {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct LoadScriptParams {
     /// Session ID
     pub session_id: String,
@@ -234,6 +254,7 @@ pub struct LoadScriptParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct UnloadScriptParams {
     /// Session ID
     pub session_id: String,
@@ -242,6 +263,7 @@ pub struct UnloadScriptParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct RunScriptParams {
     /// Session ID
     pub session_id: String,
@@ -250,6 +272,7 @@ pub struct RunScriptParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct InvokeScriptParams {
     /// Session ID
     pub session_id: String,
@@ -261,6 +284,7 @@ pub struct InvokeScriptParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct EvalScriptParams {
     /// Session ID
     pub session_id: String,
@@ -273,6 +297,7 @@ pub struct EvalScriptParams {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct CrashTriageParams {
     /// Path to the crash dump file (.dmp)
     pub dump_path: String,
@@ -281,12 +306,14 @@ pub struct CrashTriageParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct ThreadAnalysisParams {
     /// Session ID of an active debug session
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema_compat::strip_nonstandard_formats)]
 pub struct MemoryInvestigationParams {
     /// Session ID of an active debug session
     pub session_id: String,

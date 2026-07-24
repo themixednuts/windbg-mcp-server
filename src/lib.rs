@@ -6,6 +6,7 @@
 pub mod config;
 pub mod debugger;
 pub mod process_guard;
+pub mod schema_compat;
 pub mod server;
 pub mod types;
 
